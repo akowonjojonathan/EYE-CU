@@ -18,10 +18,10 @@ const WEB_MAP = {
   top: 46,
   mapWidth: 358,
   mapHeight: 468,
-  minLatitude: 5.7625,
-  maxLatitude: 5.7765,
-  minLongitude: 0.0773,
-  maxLongitude: 0.0908,
+  minLatitude: 5.7675,
+  maxLatitude: 5.7717,
+  minLongitude: 0.0815,
+  maxLongitude: 0.0852,
 };
 
 function projectToWebMap(coordinate: Coordinate) {
@@ -54,7 +54,6 @@ export function CampusMap({
   return (
     <View style={[styles.map, { backgroundColor: colors.mapCanvas }]}>
       <Svg
-        accessible
         accessibilityLabel="Schematic map of Central University Miotso"
         width="100%"
         height="100%"
@@ -129,7 +128,19 @@ export function CampusMap({
             testID={`map-marker-${place.id}`}
           >
             <Feather
-              name={place.category === "Food" ? "coffee" : "map-pin"}
+              name={
+                place.category === "Food"
+                  ? "coffee"
+                  : place.category === "Residence"
+                    ? "home"
+                    : place.category === "Sports"
+                      ? "activity"
+                      : place.category === "Academic"
+                        ? "book-open"
+                        : place.category === "Services"
+                          ? "briefcase"
+                          : "map-pin"
+              }
               size={selected ? 17 : 15}
               color={colors.primaryForeground}
             />
@@ -139,7 +150,6 @@ export function CampusMap({
 
       {userCoordinate ? (
         <View
-          accessible
           accessibilityLabel="Your current location"
           style={[
             styles.webUserMarker,

@@ -3,7 +3,13 @@ export type Coordinate = {
   longitude: number;
 };
 
-export type PlaceCategory = "Campus" | "Academic" | "Food" | "Services";
+export type PlaceCategory =
+  | "Campus"
+  | "Academic"
+  | "Food"
+  | "Residence"
+  | "Sports"
+  | "Services";
 
 export type CampusPlace = Coordinate & {
   id: string;
@@ -13,12 +19,24 @@ export type CampusPlace = Coordinate & {
 };
 
 export const CAMPUS_CENTER: Coordinate = {
-  latitude: 5.7692,
-  longitude: 0.0828,
+  latitude: 5.769249,
+  longitude: 0.083408,
 };
 
-// The campus outline and named places below are derived from OpenStreetMap.
-// Way centroids are approximate pins, not official university coordinates.
+export const CAMPUS_INITIAL_REGION = {
+  ...CAMPUS_CENTER,
+  latitudeDelta: 0.0047,
+  longitudeDelta: 0.0022,
+};
+
+export const PLACE_FOCUS_DELTA = {
+  latitudeDelta: 0.002,
+  longitudeDelta: 0.001,
+};
+
+// The campus outline and roads are derived from OpenStreetMap. Places identified
+// in the shared Google Maps screenshot use estimated coordinates from that view;
+// confirm those pins with the university before relying on them.
 export const CAMPUS_OUTLINE: Coordinate[] = [
   { latitude: 5.77441, longitude: 0.0790771 },
   { latitude: 5.7753138, longitude: 0.0811221 },
@@ -48,15 +66,31 @@ export const CAMPUS_PLACES: CampusPlace[] = [
     id: "central-university",
     name: "Central University",
     category: "Campus",
-    note: "Miotso campus",
-    latitude: 5.7692565,
-    longitude: 0.0817325,
+    note: "Campus reference point from your shared map link",
+    latitude: 5.769249,
+    longitude: 0.083408,
+  },
+  {
+    id: "block-b",
+    name: "Block B - Central University",
+    category: "Academic",
+    note: "Approximate pin from your shared map image",
+    latitude: 5.7703271,
+    longitude: 0.0826945,
+  },
+  {
+    id: "block-e",
+    name: "Block E - Central University",
+    category: "Academic",
+    note: "Approximate pin from your shared map image",
+    latitude: 5.770562,
+    longitude: 0.0829842,
   },
   {
     id: "block-c",
     name: "Block C",
     category: "Academic",
-    note: "Mapped academic building",
+    note: "OpenStreetMap location; confirm the building position",
     latitude: 5.7707712,
     longitude: 0.0819352,
   },
@@ -64,9 +98,25 @@ export const CAMPUS_PLACES: CampusPlace[] = [
     id: "block-f",
     name: "Block F",
     category: "Academic",
-    note: "Mapped academic building",
+    note: "OpenStreetMap location; confirm the building position",
     latitude: 5.7712618,
     longitude: 0.0825377,
+  },
+  {
+    id: "trinity-hall",
+    name: "Trinity Hall",
+    category: "Residence",
+    note: "Approximate pin from your shared map image",
+    latitude: 5.7698041,
+    longitude: 0.0825175,
+  },
+  {
+    id: "soccer-field",
+    name: "Soccer Field",
+    category: "Sports",
+    note: "Approximate pin from your shared map image",
+    latitude: 5.7696973,
+    longitude: 0.0838103,
   },
   {
     id: "central-plaza",
@@ -75,6 +125,14 @@ export const CAMPUS_PLACES: CampusPlace[] = [
     note: "Mapped campus place",
     latitude: 5.7687906,
     longitude: 0.0838249,
+  },
+  {
+    id: "food-court",
+    name: "Food Court",
+    category: "Food",
+    note: "Approximate pin from your shared map image",
+    latitude: 5.7689394,
+    longitude: 0.0835743,
   },
   {
     id: "cafeteria",
@@ -99,6 +157,38 @@ export const CAMPUS_PLACES: CampusPlace[] = [
     note: "Mapped food court",
     latitude: 5.7683912,
     longitude: 0.0839953,
+  },
+  {
+    id: "cu-male-hall",
+    name: "CU Male Hall",
+    category: "Residence",
+    note: "Approximate pin from your shared map image",
+    latitude: 5.7682563,
+    longitude: 0.0844916,
+  },
+  {
+    id: "pronto",
+    name: "Pronto",
+    category: "Residence",
+    note: "Approximate pin from your shared map image",
+    latitude: 5.7689074,
+    longitude: 0.0849369,
+  },
+  {
+    id: "calbank",
+    name: "CalBank",
+    category: "Services",
+    note: "Approximate pin from your shared map image",
+    latitude: 5.7682563,
+    longitude: 0.0846794,
+  },
+  {
+    id: "lali-hostel",
+    name: "Lali Hostel",
+    category: "Residence",
+    note: "Approximate pin from your shared map image",
+    latitude: 5.7679094,
+    longitude: 0.0848027,
   },
   {
     id: "post-office",

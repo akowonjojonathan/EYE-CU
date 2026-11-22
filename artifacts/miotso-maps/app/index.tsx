@@ -20,9 +20,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { CampusMap } from "@/components/CampusMap";
 import {
-  CAMPUS_CENTER,
+  CAMPUS_INITIAL_REGION,
   CAMPUS_PLACES,
   OSM_ATTRIBUTION,
+  PLACE_FOCUS_DELTA,
   type CampusPlace,
   type Coordinate,
   type PlaceCategory,
@@ -34,8 +35,29 @@ const CATEGORIES: Array<"All" | PlaceCategory> = [
   "Campus",
   "Academic",
   "Food",
+  "Residence",
+  "Sports",
   "Services",
 ];
+
+function iconForCategory(
+  category: PlaceCategory,
+): React.ComponentProps<typeof Feather>["name"] {
+  switch (category) {
+    case "Academic":
+      return "book-open";
+    case "Food":
+      return "coffee";
+    case "Residence":
+      return "home";
+    case "Sports":
+      return "activity";
+    case "Services":
+      return "briefcase";
+    default:
+      return "map";
+  }
+}
 
 function placesFor(category: "All" | PlaceCategory, query: string) {
   const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -92,8 +114,7 @@ export default function CampusHomeScreen() {
       {
         latitude: place.latitude,
         longitude: place.longitude,
-        latitudeDelta: 0.006,
-        longitudeDelta: 0.006,
+        ...PLACE_FOCUS_DELTA,
       },
       450,
     );
@@ -239,7 +260,6 @@ export default function CampusHomeScreen() {
             </Text>
           </View>
           <View
-            accessible
             accessibilityLabel={`${CAMPUS_PLACES.length} mapped places`}
             style={[styles.placeCount, { backgroundColor: colors.card }]}
           >
@@ -351,15 +371,7 @@ export default function CampusHomeScreen() {
                     ]}
                   >
                     <Feather
-                      name={
-                        place.category === "Food"
-                          ? "coffee"
-                          : place.category === "Academic"
-                            ? "book-open"
-                            : place.category === "Services"
-                              ? "briefcase"
-                              : "map"
-                      }
+                      name={iconForCategory(place.category)}
                       size={16}
                       color={colors.primary}
                     />
@@ -461,9 +473,7 @@ export default function CampusHomeScreen() {
           onPress={() => {
             mapRef.current?.animateToRegion(
               {
-                ...CAMPUS_CENTER,
-                latitudeDelta: 0.018,
-                longitudeDelta: 0.018,
+                ...CAMPUS_INITIAL_REGION,
               },
               450,
             );
@@ -499,15 +509,7 @@ export default function CampusHomeScreen() {
                 ]}
               >
                 <Feather
-                  name={
-                    selectedPlace.category === "Food"
-                      ? "coffee"
-                      : selectedPlace.category === "Academic"
-                        ? "book-open"
-                        : selectedPlace.category === "Services"
-                          ? "briefcase"
-                          : "map-pin"
-                  }
+                  name={iconForCategory(selectedPlace.category)}
                   size={20}
                   color={colors.primary}
                 />
@@ -574,7 +576,8 @@ export default function CampusHomeScreen() {
                 style={[styles.dataNoticeText, { color: colors.mutedForeground }]}
                 numberOfLines={2}
               >
-                Community map points may need confirmation with the university.
+                Some pins are estimated from your shared map image; confirm exact
+                positions with the university.
               </Text>
             </View>
             <Text style={[styles.attribution, { color: colors.mutedForeground }]}>

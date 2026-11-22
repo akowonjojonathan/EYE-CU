@@ -1,7 +1,12 @@
 import React from "react";
 import { StyleSheet } from "react-native";
 import MapView, { Marker, Polygon } from "react-native-maps";
-import { CAMPUS_CENTER, CAMPUS_OUTLINE, type CampusPlace, type Coordinate } from "@/constants/campus";
+import {
+  CAMPUS_INITIAL_REGION,
+  CAMPUS_OUTLINE,
+  type CampusPlace,
+  type Coordinate,
+} from "@/constants/campus";
 import { useColors } from "@/hooks/useColors";
 
 export type CampusMapProps = {
@@ -25,12 +30,8 @@ export function CampusMap({
     <MapView
       ref={mapRef}
       style={styles.map}
-      initialRegion={{
-        ...CAMPUS_CENTER,
-        latitudeDelta: 0.018,
-        longitudeDelta: 0.018,
-      }}
-      mapType="standard"
+      initialRegion={CAMPUS_INITIAL_REGION}
+      mapType="hybrid"
       showsCompass={false}
       showsScale={false}
       showsBuildings

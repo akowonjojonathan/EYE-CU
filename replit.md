@@ -28,8 +28,8 @@ A mobile campus guide that helps students and visitors find mapped locations aro
 
 ## Architecture decisions
 
-- The initial campus boundary and named places come from OpenStreetMap community data; confirm names and pin coordinates with the university before relying on them.
-- Native devices use the platform map. The browser preview uses a schematic campus view.
+- Campus roads and outline come from OpenStreetMap; new named places and the starting camera use the user's Google Maps reference. Image-derived pins are estimates and should be checked with the university.
+- Native devices show the platform's hybrid map. The browser preview uses a schematic campus view.
 
 ## Product
 
