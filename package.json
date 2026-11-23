@@ -1,20 +1,32 @@
 {
   "name": "workspace",
   "version": "0.0.0",
-  "packageManager": "pnpm@10.26.1",
   "license": "MIT",
-  "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
-    "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
-  },
   "private": true,
-  "dependencies": {
-    "@replit/connectors-sdk": "^0.7.0"
+  "workspaces": [
+    "artifacts/web",
+    "artifacts/api-server",
+    "lib/api-zod",
+    "lib/api-client-react",
+    "lib/db"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=artifacts/web",
+    "build": "npm run build --workspace=artifacts/web && npm run build --workspace=artifacts/api-server",
+    "start": "npm run start --workspace=artifacts/web",
+    "lint": "npm run typecheck",
+    "typecheck": "tsc --build && npm run typecheck --workspace=artifacts/web && npm run typecheck --workspace=artifacts/api-server"
   },
   "devDependencies": {
-    "prettier": "^3.9.10",
-    "typescript": "~5.9.3"
+    "prettier": "^3.5.3",
+    "tsx": "^4.19.3",
+    "typescript": "~5.8.2"
+  },
+  "dependencies": {
+    "@firebase/eslint-plugin-security-rules": "^0.0.2",
+    "@types/leaflet": "^1.9.22",
+    "eslint": "^10.15.0",
+    "firebase": "^13.4.0",
+    "leaflet": "^1.9.4"
   }
 }

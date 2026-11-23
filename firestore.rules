@@ -1,0 +1,202 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 80 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrapAdmin() {
+      return isVerified() && request.auth.token.email == 'akowonjonanayaw@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin() || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidCategory(category) {
+      return category is string && category in ['Campus', 'Academic', 'Food', 'Residence', 'Sports', 'Services'];
+    }
+
+    function isValidCampusPlace(data, placeId) {
+      return data.keys().hasAll([
+          'id',
+          'name',
+          'category',
+          'latitude',
+          'longitude',
+          'note',
+          'hours',
+          'openDays',
+          'openHour',
+          'closeHour',
+          'roomsOrDetails',
+          'isSeedOverride',
+          'updatedBy',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id',
+          'name',
+          'category',
+          'latitude',
+          'longitude',
+          'note',
+          'hours',
+          'openDays',
+          'openHour',
+          'closeHour',
+          'roomsOrDetails',
+          'imageUrl',
+          'isSeedOverride',
+          'updatedBy',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.id is string
+        && data.id == placeId
+        && isValidId(data.id)
+        && data.name is string
+        && data.name.size() >= 2
+        && data.name.size() <= 100
+        && isValidCategory(data.category)
+        && data.latitude is number
+        && data.latitude >= -90
+        && data.latitude <= 90
+        && data.longitude is number
+        && data.longitude >= -180
+        && data.longitude <= 180
+        && data.note is string
+        && data.note.size() <= 240
+        && data.hours is string
+        && data.hours.size() <= 80
+        && data.openDays is string
+        && data.openDays.size() <= 40
+        && data.openHour is number
+        && data.openHour >= -1
+        && data.openHour <= 24
+        && data.closeHour is number
+        && data.closeHour >= -1
+        && data.closeHour <= 24
+        && data.roomsOrDetails is string
+        && data.roomsOrDetails.size() <= 120
+        && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 500))
+        && data.isSeedOverride is bool
+        && data.updatedBy is string
+        && data.updatedBy.size() <= 128
+        && data.updatedBy == request.auth.uid
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminUser(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'createdAt'])
+        && data.uid is string
+        && data.uid == userId
+        && isValidId(data.uid)
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 160
+        && data.role is string
+        && data.role == 'admin'
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAppSettings(data) {
+      return data.keys().hasAll(['formspreeEndpoint', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['formspreeEndpoint', 'updatedBy', 'updatedAt'])
+        && data.formspreeEndpoint is string
+        && data.formspreeEndpoint.size() <= 200
+        && (data.formspreeEndpoint == '' || data.formspreeEndpoint.matches('^https://formspree\\.io/f/[a-zA-Z0-9]+$'))
+        && data.updatedBy is string
+        && data.updatedBy.size() <= 128
+        && data.updatedBy == request.auth.uid
+        && data.updatedAt is timestamp;
+    }
+
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, create, update, delete: if false;
+    }
+
+    match /app_settings/{settingId} {
+      allow get: if settingId == 'public';
+      allow list, delete: if false;
+      allow create, update: if isVerified()
+        && settingId == 'public'
+        && isValidAppSettings(incoming())
+        && incoming().updatedAt == request.time
+        && isAdmin();
+    }
+
+    match /admins/{userId} {
+      allow get: if isVerified() && isValidId(userId) && (request.auth.uid == userId || isBootstrapAdmin());
+      allow list: if isBootstrapAdmin();
+      allow create: if isBootstrapAdmin()
+        && isValidId(userId)
+        && isValidAdminUser(incoming(), userId)
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isBootstrapAdmin() && isValidId(userId) && userId != request.auth.uid;
+    }
+
+    match /campus_places/{placeId} {
+      allow get: if isValidId(placeId);
+      allow list: if true;
+      allow create: if isVerified()
+        && isValidId(placeId)
+        && isValidCampusPlace(incoming(), placeId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && isAdmin();
+      allow update: if isVerified()
+        && isValidId(placeId)
+        && isValidCampusPlace(incoming(), placeId)
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name',
+          'category',
+          'latitude',
+          'longitude',
+          'note',
+          'hours',
+          'openDays',
+          'openHour',
+          'closeHour',
+          'roomsOrDetails',
+          'imageUrl',
+          'isSeedOverride',
+          'updatedBy',
+          'updatedAt'
+        ])
+        && isAdmin();
+      allow delete: if isVerified()
+        && isValidId(placeId)
+        && isAdmin();
+    }
+  }
+}

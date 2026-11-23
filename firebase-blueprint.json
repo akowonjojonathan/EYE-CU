@@ -1,0 +1,189 @@
+{
+  "entities": {
+    "CampusPlace": {
+      "title": "CampusPlace",
+      "description": "A mapped location or overridden seed pin at Central University Miotso campus.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "URL-safe identifier matching the document ID.",
+          "minLength": 1,
+          "maxLength": 80,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the campus building, hall, eatery, or service.",
+          "minLength": 2,
+          "maxLength": 100
+        },
+        "category": {
+          "type": "string",
+          "description": "Directory category for the campus place.",
+          "enum": ["Campus", "Academic", "Food", "Residence", "Sports", "Services"]
+        },
+        "latitude": {
+          "type": "number",
+          "description": "WGS84 latitude in decimal degrees."
+        },
+        "longitude": {
+          "type": "number",
+          "description": "WGS84 longitude in decimal degrees."
+        },
+        "note": {
+          "type": "string",
+          "description": "Short campus description or landmark guidance.",
+          "maxLength": 240
+        },
+        "hours": {
+          "type": "string",
+          "description": "Human-readable opening hours label.",
+          "maxLength": 80
+        },
+        "openDays": {
+          "type": "string",
+          "description": "Operating days schedule label.",
+          "maxLength": 40
+        },
+        "openHour": {
+          "type": "number",
+          "description": "Opening hour in 24h decimal time (0-24) or -1 if N/A."
+        },
+        "closeHour": {
+          "type": "number",
+          "description": "Closing hour in 24h decimal time (0-24) or -1 if N/A."
+        },
+        "roomsOrDetails": {
+          "type": "string",
+          "description": "Room range, entrance accessibility, or service summary.",
+          "maxLength": 120
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Optional photo URL showing what the place looks like.",
+          "maxLength": 500
+        },
+        "isSeedOverride": {
+          "type": "boolean",
+          "description": "True when overriding a built-in campus seed pin."
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator who last wrote this record.",
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last-modified timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "category",
+        "latitude",
+        "longitude",
+        "note",
+        "hours",
+        "openDays",
+        "openHour",
+        "closeHour",
+        "roomsOrDetails",
+        "isSeedOverride",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized campus administrator allowed to create and edit campus pins.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the document ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified administrator email address.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "role": {
+          "type": "string",
+          "description": "Assigned role.",
+          "enum": ["admin"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "Public non-PII integration settings such as the Formspree endpoint for contact and pin reports.",
+      "type": "object",
+      "properties": {
+        "formspreeEndpoint": {
+          "type": "string",
+          "description": "HTTPS Formspree form endpoint URL.",
+          "maxLength": 200
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Admin UID who updated settings.",
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of update."
+        }
+      },
+      "required": ["formspreeEndpoint", "updatedBy", "updatedAt"]
+    },
+    "ConnectionHealth": {
+      "title": "ConnectionHealth",
+      "description": "Read-only health probe document path.",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "/campus_places/{placeId}": {
+      "schema": { "$ref": "#/entities/CampusPlace" },
+      "description": "Public campus places directory and administrator-calibrated pin overrides."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Restricted collection of delegated campus administrators."
+    },
+    "/app_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/AppSettings" },
+      "description": "Publicly readable Formspree integration configuration writable only by admins."
+    },
+    "/test/{docId}": {
+      "schema": { "$ref": "#/entities/ConnectionHealth" },
+      "description": "Connection verification probe path (/test/connection)."
+    }
+  }
+}
