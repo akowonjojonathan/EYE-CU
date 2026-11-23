@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: campus
+    description: Campus place directory and administration
 paths:
   /healthz:
     get:
@@ -24,7 +26,69 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /campus-places:
+    get:
+      operationId: listCampusPlaces
+      tags: [campus]
+      summary: List places added by campus administrators
+      responses:
+        "200":
+          description: Added campus places
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampusPlacesResponse"
+    post:
+      operationId: createCampusPlace
+      tags: [campus]
+      summary: Add a campus place
+      security:
+        - adminBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCampusPlaceRequest"
+      responses:
+        "201":
+          description: Place created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampusPlace"
+        "401":
+          description: Admin sign-in required
+        "422":
+          description: Place details are invalid
+  /admin/login:
+    post:
+      operationId: adminLogin
+      tags: [campus]
+      summary: Sign in to campus place administration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminLoginRequest"
+      responses:
+        "200":
+          description: Admin session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSession"
+        "401":
+          description: Username or password is incorrect
+        "503":
+          description: Admin access is not configured
 components:
+  securitySchemes:
+    adminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: HMAC-SHA256
   schemas:
     HealthStatus:
       type: object
@@ -33,4 +97,105 @@ components:
           type: string
       required:
         - status
+    CampusPlace:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        category:
+          $ref: "#/components/schemas/PlaceCategory"
+        latitude:
+          type: number
+          format: double
+        longitude:
+          type: number
+          format: double
+        note:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - category
+        - latitude
+        - longitude
+        - note
+        - createdAt
+    CampusPlacesResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CampusPlace"
+      required:
+        - items
+    CreateCampusPlaceRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+        category:
+          $ref: "#/components/schemas/PlaceCategory"
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+      required:
+        - name
+        - category
+        - latitude
+        - longitude
+    AdminLoginRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          minLength: 1
+          maxLength: 256
+          writeOnly: true
+      required:
+        - username
+        - password
+    AdminSession:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+      required:
+        - token
+        - expiresAt
+    PlaceCategory:
+      type: string
+      enum:
+        - Campus
+        - Academic
+        - Food
+        - Residence
+        - Sports
+        - Services
 

@@ -1,0 +1,341 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+.miotso-current {
+  --miotso-background: #f7f8f4;
+  --miotso-foreground: #18342e;
+  --miotso-card: #ffffff;
+  --miotso-primary: #176b56;
+  --miotso-primary-foreground: #ffffff;
+  --miotso-secondary: #e9f1ea;
+  --miotso-secondary-foreground: #21483d;
+  --miotso-muted-foreground: #718078;
+  --miotso-border: #dce4da;
+  --miotso-map: #e8efe6;
+  --miotso-park: #d3e5cc;
+  --miotso-road: #ffffff;
+  --miotso-road-edge: #c8d2c6;
+  --miotso-pin: #d99827;
+
+  position: relative;
+  width: 100%;
+  height: 100dvh;
+  min-height: 700px;
+  overflow: hidden;
+  color: var(--miotso-foreground);
+  background: var(--miotso-map);
+  font-family: Inter, sans-serif;
+}
+
+.miotso-current button,
+.miotso-current input {
+  font: inherit;
+}
+
+.miotso-current .current-map {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.miotso-current .current-map svg {
+  width: 100%;
+  height: 100%;
+}
+
+.miotso-current .current-pin {
+  position: absolute;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--miotso-pin);
+  box-shadow: 0 2px 6px #122c2533;
+  transform: translate(-50%, -80%);
+}
+
+.miotso-current .current-pin.is-selected {
+  width: 38px;
+  height: 38px;
+  background: var(--miotso-primary);
+}
+
+.miotso-current .current-top {
+  position: absolute;
+  z-index: 3;
+  top: max(env(safe-area-inset-top), 34px);
+  right: 18px;
+  left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.miotso-current .current-heading,
+.miotso-current .current-place-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.miotso-current .current-heading {
+  justify-content: space-between;
+  padding: 0 2px;
+}
+
+.miotso-current .current-eyebrow {
+  margin: 0 0 4px;
+  color: var(--miotso-primary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.3px;
+}
+
+.miotso-current .current-heading h1 {
+  margin: 0;
+  color: var(--miotso-foreground);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.45px;
+}
+
+.miotso-current .current-count {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 18px;
+  background: var(--miotso-card);
+  box-shadow: 0 2px 8px #153a2f14;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.miotso-current .current-count svg {
+  color: var(--miotso-primary);
+}
+
+.miotso-current .current-search {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  gap: 11px;
+  padding: 0 15px;
+  border: 1px solid var(--miotso-border);
+  border-radius: 16px;
+  background: var(--miotso-card);
+  box-shadow: 0 4px 12px #153a2f1a;
+  color: var(--miotso-muted-foreground);
+}
+
+.miotso-current .current-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  border: 0;
+  outline: 0;
+  color: var(--miotso-foreground);
+  background: transparent;
+  font-size: 15px;
+}
+
+.miotso-current .current-categories {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0;
+  scrollbar-width: none;
+}
+
+.miotso-current .current-categories::-webkit-scrollbar {
+  display: none;
+}
+
+.miotso-current .current-categories button {
+  flex: 0 0 auto;
+  padding: 9px 14px;
+  border: 1px solid var(--miotso-border);
+  border-radius: 18px;
+  color: var(--miotso-secondary-foreground);
+  background: var(--miotso-card);
+  box-shadow: 0 2px 4px #153a2f0f;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.miotso-current .current-categories button.active {
+  border-color: var(--miotso-primary);
+  color: var(--miotso-primary-foreground);
+  background: var(--miotso-primary);
+}
+
+.miotso-current .current-results {
+  overflow: hidden;
+  border: 1px solid var(--miotso-border);
+  border-radius: 16px;
+  background: var(--miotso-card);
+  box-shadow: 0 6px 14px #153a2f1f;
+}
+
+.miotso-current .current-results button {
+  display: flex;
+  width: 100%;
+  min-height: 57px;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 12px;
+  border: 0;
+  color: var(--miotso-muted-foreground);
+  background: transparent;
+  text-align: left;
+}
+
+.miotso-current .current-result-icon,
+.miotso-current .current-place-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--miotso-primary);
+  background: var(--miotso-secondary);
+}
+
+.miotso-current .current-results button > span:nth-child(2) {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+}
+
+.miotso-current .current-results b {
+  overflow: hidden;
+  color: var(--miotso-foreground);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.miotso-current .current-results small {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.miotso-current .current-map-actions {
+  position: absolute;
+  z-index: 2;
+  right: 18px;
+  bottom: 260px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.miotso-current .current-map-actions button,
+.miotso-current .current-directions {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  border: 1px solid var(--miotso-border);
+  border-radius: 22px;
+  color: var(--miotso-foreground);
+  background: var(--miotso-card);
+  box-shadow: 0 3px 8px #153a2f1f;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.miotso-current .current-map-actions button svg {
+  color: var(--miotso-primary);
+}
+
+.miotso-current .current-map-actions button:last-child {
+  width: 42px;
+  padding: 0;
+}
+
+.miotso-current .current-place-card {
+  position: absolute;
+  z-index: 3;
+  right: 14px;
+  bottom: max(env(safe-area-inset-bottom), 18px);
+  left: 14px;
+  padding: 15px 15px 11px;
+  border: 1px solid var(--miotso-border);
+  border-radius: 21px;
+  background: var(--miotso-card);
+  box-shadow: 0 6px 18px #153a2f24;
+}
+
+.miotso-current .current-place-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+}
+
+.miotso-current .current-place-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+}
+
+.miotso-current .current-place-copy small {
+  color: var(--miotso-primary);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+
+.miotso-current .current-place-copy b {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.miotso-current .current-place-copy span {
+  overflow: hidden;
+  color: var(--miotso-muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.miotso-current .current-directions {
+  border: 0;
+  border-radius: 13px;
+  color: var(--miotso-primary-foreground);
+  background: var(--miotso-primary);
+}
+
+.miotso-current .current-data-notice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 9px;
+  border-top: 1px solid var(--miotso-border);
+  color: var(--miotso-muted-foreground);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.miotso-current .current-data-notice svg {
+  flex: 0 0 auto;
+}
+
+.miotso-current .current-attribution {
+  margin: 7px 0 0;
+  color: var(--miotso-muted-foreground);
+  font-size: 9px;
+  text-align: right;
+}
