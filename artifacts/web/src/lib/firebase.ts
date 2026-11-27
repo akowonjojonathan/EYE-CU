@@ -14,17 +14,43 @@ import {
   getDocFromServer,
   getDocs,
   getFirestore,
+  initializeFirestore,
   onSnapshot,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   serverTimestamp,
   setDoc,
+  updateDoc,
   writeBatch,
+  type Firestore,
   type FirestoreError,
 } from "firebase/firestore";
 import firebaseConfig from "../../../../firebase-applet-config.json";
-import type { CampusPlace, PlaceCategory } from "@/constants/campus";
+import {
+  parseIndoorSteps,
+  type CampusPlace,
+  type PlaceCategory,
+} from "@/constants/campus";
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+function createOfflineReadyFirestore(): Firestore {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
+      },
+      firebaseConfig.firestoreDatabaseId,
+    );
+  } catch {
+    return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+  }
+}
+
+export const db = createOfflineReadyFirestore();
 export const auth = getAuth(app);
 export const googleAuthProvider = new GoogleAuthProvider();
 googleAuthProvider.setCustomParameters({ prompt: "select_account" });
@@ -84,12 +110,15 @@ export function handleFirestoreError(
 }
 
 export async function testConnection(): Promise<boolean> {
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return false;
+  }
   try {
     await getDocFromServer(doc(db, "test", "connection"));
     return true;
   } catch (error) {
     if (error instanceof Error && error.message.includes("the client is offline")) {
-      console.error("Please check your Firebase configuration.");
+      console.warn("Firestore running in offline cached mode.");
     }
     return false;
   }
@@ -113,6 +142,21 @@ function normalizePlacePayload(
   isSeedOverride: boolean,
   uid: string,
 ) {
+  const isIndoor = Boolean(place.isIndoor);
+  const parentBuildingName = isIndoor
+    ? (place.parentBuildingName || "").trim().slice(0, 100)
+    : "";
+  const indoorSteps = isIndoor
+    ? parseIndoorSteps(place.indoorSteps ?? []).map((step, index) => ({
+        stepNumber: index + 1,
+        directionIcon: step.directionIcon,
+        instructionText: step.instructionText.trim().slice(0, 240),
+        ...(step.landmarkImageUrl && step.landmarkImageUrl.trim()
+          ? { landmarkImageUrl: step.landmarkImageUrl.trim().slice(0, 40000) }
+          : {}),
+      }))
+    : [];
+
   return {
     id,
     name: place.name.trim().slice(0, 100),
@@ -132,6 +176,9 @@ function normalizePlacePayload(
         : -1,
     roomsOrDetails: (place.roomsOrDetails || "").trim().slice(0, 120),
     imageUrl: (place.imageUrl || "").trim().slice(0, 500),
+    isIndoor,
+    parentBuildingName,
+    indoorSteps,
     isSeedOverride,
     updatedBy: uid,
   };
@@ -146,6 +193,13 @@ function docToCampusPlace(id: string, data: Record<string, unknown>): CampusPlac
   ) {
     return null;
   }
+  const indoorSteps = parseIndoorSteps(data.indoorSteps);
+  const isIndoor = Boolean(data.isIndoor);
+  const parentBuildingName =
+    typeof data.parentBuildingName === "string" && data.parentBuildingName.trim()
+      ? data.parentBuildingName.trim()
+      : undefined;
+
   return {
     id,
     name: data.name,
@@ -172,6 +226,9 @@ function docToCampusPlace(id: string, data: Record<string, unknown>): CampusPlac
       typeof data.imageUrl === "string" && data.imageUrl
         ? data.imageUrl
         : undefined,
+    ...(isIndoor ? { isIndoor: true } : {}),
+    ...(parentBuildingName ? { parentBuildingName } : {}),
+    ...(indoorSteps.length > 0 ? { indoorSteps } : {}),
     isSeedOverride: Boolean(data.isSeedOverride),
   };
 }
@@ -218,13 +275,35 @@ export async function saveCampusPlaceToCloud(
 
   try {
     const existingSnap = await getDoc(docRef);
-    if (existingSnap.exists()) {
-      const existingData = existingSnap.data();
-      await setDoc(docRef, {
-        ...payload,
-        createdAt: existingData.createdAt ?? serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+    let exists = existingSnap.exists();
+
+    if (!exists && (typeof navigator === "undefined" || navigator.onLine)) {
+      try {
+        const serverSnap = await getDocFromServer(docRef);
+        exists = serverSnap.exists();
+      } catch {
+        // Offline or unreachable; fall back to local cache state
+      }
+    }
+
+    if (exists) {
+      try {
+        await updateDoc(docRef, {
+          ...payload,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (updateErr) {
+        const errCode = (updateErr as { code?: string })?.code;
+        if (errCode === "not-found") {
+          await setDoc(docRef, {
+            ...payload,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          throw updateErr;
+        }
+      }
     } else {
       await setDoc(docRef, {
         ...payload,
@@ -232,9 +311,12 @@ export async function saveCampusPlaceToCloud(
         updatedAt: serverTimestamp(),
       });
     }
+
     return {
       ...place,
       id,
+      latitude: payload.latitude,
+      longitude: payload.longitude,
       isSeedOverride,
     };
   } catch (error) {
@@ -359,3 +441,5 @@ export async function saveFormspreeEndpoint(
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
+
+

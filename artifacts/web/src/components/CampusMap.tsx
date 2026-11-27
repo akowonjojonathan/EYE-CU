@@ -14,10 +14,12 @@ import {
   CAMPUS_OUTLINE,
   CAMPUS_WEB_PATHS,
   CATEGORY_COLORS,
+  isNightSafetyPlace,
   type CampusPlace,
   type Coordinate,
   type PlaceCategory,
 } from "@/constants/campus";
+import { WELL_LIT_CORRIDOR_POLYLINES } from "@/lib/walking-navigation";
 
 const WEB_MAP = {
   width: 390,
@@ -26,10 +28,10 @@ const WEB_MAP = {
   top: 46,
   mapWidth: 358,
   mapHeight: 468,
-  minLatitude: 5.7675,
-  maxLatitude: 5.7717,
-  minLongitude: 0.0815,
-  maxLongitude: 0.0852,
+  minLatitude: 5.7652,
+  maxLatitude: 5.7725,
+  minLongitude: 0.0798,
+  maxLongitude: 0.0872,
 };
 
 export function projectToWebMap(coordinate: Coordinate) {
@@ -99,7 +101,11 @@ export type CampusMapProps = {
   routeStopIds?: string[];
   originCoordinate: Coordinate | null;
   isLiveGps: boolean;
+  headingDegrees?: number | null;
+  isNavigating?: boolean;
   darkMode: boolean;
+  nightWalkMode?: boolean;
+  radarRadiusMeters?: number | null;
   focusKey?: number;
   recenterKey?: number;
   routeCoordinates?: Coordinate[] | null;
@@ -122,7 +128,11 @@ export function CampusMap({
   routeStopIds = [],
   originCoordinate,
   isLiveGps,
+  headingDegrees = null,
+  isNavigating = false,
   darkMode,
+  nightWalkMode = false,
+  radarRadiusMeters = null,
   focusKey = 0,
   recenterKey = 0,
   routeCoordinates,
@@ -241,9 +251,9 @@ export function CampusMap({
     const cy = rect.height / 2;
 
     const nextZoom = Math.max(zoom, targetZoom);
-    const maxOffset = (nextZoom - 1) * 220;
+    const maxOffset = Math.max(rect.width, rect.height, 420) * (nextZoom - 1) * 0.65;
     const rawPanX = (cx - px) * nextZoom;
-    const rawPanY = (cy - py) * nextZoom;
+    const rawPanY = (cy - 36 - py) * nextZoom;
 
     setZoom(nextZoom);
     setPan({
@@ -408,6 +418,13 @@ export function CampusMap({
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    try {
+      if (containerRef.current?.hasPointerCapture(e.pointerId)) {
+        containerRef.current.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // Ignore pointer capture errors
+    }
     if (pinDragRef.current.place) {
       const targetPlace = pinDragRef.current.place;
       const wasMoved = pinDragRef.current.moved;
@@ -439,6 +456,19 @@ export function CampusMap({
     }
   };
 
+  const handlePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    try {
+      if (containerRef.current?.hasPointerCapture(e.pointerId)) {
+        containerRef.current.releasePointerCapture(e.pointerId);
+      }
+    } catch {
+      // Ignore
+    }
+    pinDragRef.current = { place: null, startX: 0, startY: 0, moved: false };
+    dragRef.current.active = false;
+    setDraggingPin(null);
+  };
+
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (Math.abs(e.deltaY) < 2) return;
     updateZoom(e.deltaY < 0 ? 0.25 : -0.25);
@@ -452,6 +482,7 @@ export function CampusMap({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
       onWheel={handleWheel}
     >
       <div
@@ -537,61 +568,138 @@ export function CampusMap({
             );
           })}
 
-          {routePoints ? (
-            <>
-              <polyline
-                points={routePoints}
-                fill="none"
-                stroke={mapTheme.routeGlow}
-                strokeWidth={9}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <polyline
-                points={routePoints}
-                fill="none"
-                stroke={mapTheme.primary}
-                strokeWidth={3.8}
-                strokeDasharray={routeType === "mapped" ? "none" : "6 5"}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </>
-          ) : null}
+          {nightWalkMode
+            ? WELL_LIT_CORRIDOR_POLYLINES.map((poly, idx) => {
+                const pts = poly
+                  .map((c) => {
+                    const pt = projectToWebMap(c);
+                    return `${pt.x},${pt.y}`;
+                  })
+                  .join(" ");
+                return (
+                  <React.Fragment key={`lit-${idx}`}>
+                    <polyline
+                      points={pts}
+                      fill="none"
+                      stroke="rgba(251, 191, 36, 0.25)"
+                      strokeWidth={10}
+                      strokeLinecap="round"
+                    />
+                    <polyline
+                      points={pts}
+                      fill="none"
+                      stroke="#FBBF24"
+                      strokeWidth={2.8}
+                      strokeLinecap="round"
+                    />
+                  </React.Fragment>
+                );
+              })
+            : null}
 
-          <text
-            x="118"
-            y="165"
-            fill={mapTheme.label}
-            fontFamily="JetBrains Mono, monospace"
-            fontSize="6.5"
-            fontWeight="600"
-            letterSpacing="1.1"
-          >
-            NORTH CAMPUS
-          </text>
-          <text
-            x="196"
-            y="286"
-            fill={mapTheme.label}
-            fontFamily="JetBrains Mono, monospace"
-            fontSize="6.5"
-            fontWeight="600"
-            letterSpacing="1.1"
-          >
-            CENTRAL PLAZA
-          </text>
-          <text
-            x="248"
-            y="246"
-            fill={mapTheme.label}
-            fontFamily="JetBrains Mono, monospace"
-            fontSize="6"
-            fontWeight="600"
-            letterSpacing="1"
-          >
-            SPORTS FIELD
-          </text>
+          {originCoordinate && radarRadiusMeters && radarRadiusMeters > 0 ? (() => {
+            const center = projectToWebMap(originCoordinate);
+            // ~467m height spans WEB_MAP.mapHeight (468px) -> ~1 SVG unit/meter
+            const svgRadius = Math.max(18, radarRadiusMeters * 0.88);
+            return (
+              <circle
+                cx={center.x}
+                cy={center.y}
+                r={svgRadius}
+                fill="rgba(14, 165, 233, 0.1)"
+                stroke="#0EA5E9"
+                strokeWidth={1.6}
+                strokeDasharray="5 5"
+              />
+            );
+          })() : null}
+
+          {routePoints ? (() => {
+            const coreColor = nightWalkMode
+              ? "#10B981"
+              : isNavigating
+                ? "#0EA5E9"
+                : mapTheme.primary;
+            const haloColor = nightWalkMode
+              ? "rgba(16, 185, 129, 0.34)"
+              : mapTheme.routeGlow;
+
+            return (
+              <>
+                <polyline
+                  points={routePoints}
+                  fill="none"
+                  stroke={haloColor}
+                  strokeWidth={11}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <polyline
+                  points={routePoints}
+                  fill="none"
+                  stroke={coreColor}
+                  strokeWidth={4.4}
+                  strokeDasharray={routeType === "mapped" ? "none" : "6 5"}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <polyline
+                  points={routePoints}
+                  fill="none"
+                  stroke="#FFFFFF"
+                  strokeOpacity={isNavigating ? 0.94 : 0.7}
+                  strokeWidth={2}
+                  strokeDasharray="5 11"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="eyecu-svg-route-flow"
+                />
+              </>
+            );
+          })() : null}
+
+          {(() => {
+            const northPt = projectToWebMap({ latitude: 5.7711, longitude: 0.0827 });
+            const plazaPt = projectToWebMap({ latitude: 5.7691, longitude: 0.0834 });
+            const fieldPt = projectToWebMap({ latitude: 5.76985, longitude: 0.08445 });
+            return (
+              <>
+                <text
+                  x={northPt.x}
+                  y={northPt.y}
+                  fill={mapTheme.label}
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize="6"
+                  fontWeight="600"
+                  letterSpacing="1"
+                >
+                  NORTH CAMPUS
+                </text>
+                <text
+                  x={plazaPt.x}
+                  y={plazaPt.y}
+                  fill={mapTheme.label}
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize="6"
+                  fontWeight="600"
+                  letterSpacing="1"
+                >
+                  CENTRAL PLAZA
+                </text>
+                <text
+                  x={fieldPt.x}
+                  y={fieldPt.y}
+                  fill={mapTheme.label}
+                  fontFamily="JetBrains Mono, monospace"
+                  fontSize="5.5"
+                  fontWeight="600"
+                  letterSpacing="0.9"
+                >
+                  SPORTS FIELD
+                </text>
+              </>
+            );
+          })()}
 
           <g
             transform={`translate(${WEB_MAP.left + WEB_MAP.mapWidth - 20}, ${WEB_MAP.top + 22})`}
@@ -646,6 +754,7 @@ export function CampusMap({
           const selected = place.id === selectedPlaceId;
           const saved = savedIds.includes(place.id);
           const stopNumber = stopOrderMap.get(place.id);
+          const nightSafetyBeacon = nightWalkMode && isNightSafetyPlace(place);
           const catColor = darkMode
             ? CATEGORY_COLORS[place.category].dark
             : CATEGORY_COLORS[place.category].light;
@@ -663,6 +772,11 @@ export function CampusMap({
               onPointerDown={(e) => {
                 if (!adminDragMode) return;
                 e.stopPropagation();
+                try {
+                  containerRef.current?.setPointerCapture(e.pointerId);
+                } catch {
+                  // Ignore if pointer capture is unavailable
+                }
                 pinDragRef.current = {
                   place,
                   startX: e.clientX,
@@ -676,7 +790,7 @@ export function CampusMap({
                   onSelectPlace(place);
                 }
               }}
-              className={`web-marker${selected ? " web-marker-selected" : ""}${saved && !selected ? " web-marker-saved" : ""}${adminDragMode ? " web-marker-draggable" : ""}`}
+              className={`web-marker${selected ? " web-marker-selected" : ""}${saved && !selected ? " web-marker-saved" : ""}${nightSafetyBeacon && !selected ? " is-night-beacon" : ""}${adminDragMode ? " web-marker-draggable" : ""}`}
               style={{
                 left: `${(point.x / WEB_MAP.width) * 100}%`,
                 top: `${(point.y / WEB_MAP.height) * 100}%`,
@@ -686,6 +800,9 @@ export function CampusMap({
               data-testid={`map-marker-${place.id}`}
             >
               {selected ? <span className="web-marker-selected-ring" /> : null}
+              {nightSafetyBeacon && !selected ? (
+                <span className="leaflet-night-halo" />
+              ) : null}
               <PinIcon category={place.category} size={selected ? 17 : 14} />
               {stopNumber ? (
                 <span className="marker-stop-badge tabular-nums">
@@ -713,10 +830,27 @@ export function CampusMap({
               };
             })()}
           >
+            {isLiveGps ? (
+              <>
+                <span className="eyecu-user-pulse" />
+                <span className="eyecu-user-pulse-outer" />
+              </>
+            ) : null}
+            {typeof headingDegrees === "number" &&
+            Number.isFinite(headingDegrees) ? (
+              <div
+                className={`eyecu-compass-cone is-schematic${nightWalkMode ? " is-night" : ""}`}
+                style={{ transform: `rotate(${headingDegrees}deg)` }}
+              />
+            ) : null}
             <div
               className="web-user-marker-core"
               style={{
-                backgroundColor: isLiveGps ? "#2E6DA4" : mapTheme.primary,
+                backgroundColor: nightWalkMode
+                  ? "#10B981"
+                  : isLiveGps
+                    ? "#1A73E8"
+                    : mapTheme.primary,
               }}
             />
           </div>

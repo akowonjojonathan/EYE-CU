@@ -11,6 +11,75 @@ export type PlaceCategory =
   | "Sports"
   | "Services";
 
+export type IndoorDirectionIcon =
+  | "straight"
+  | "left"
+  | "right"
+  | "stairs-up"
+  | "stairs-down"
+  | "door";
+
+export type IndoorStep = {
+  stepNumber: number;
+  directionIcon: IndoorDirectionIcon;
+  instructionText: string;
+  landmarkImageUrl?: string;
+};
+
+export const INDOOR_DIRECTION_OPTIONS: {
+  value: IndoorDirectionIcon;
+  label: string;
+}[] = [
+  { value: "straight", label: "Go Straight" },
+  { value: "left", label: "Turn Left" },
+  { value: "right", label: "Turn Right" },
+  { value: "stairs-up", label: "Stairs Up" },
+  { value: "stairs-down", label: "Stairs Down" },
+  { value: "door", label: "Room Door" },
+];
+
+const VALID_INDOOR_ICONS = new Set<IndoorDirectionIcon>([
+  "straight",
+  "left",
+  "right",
+  "stairs-up",
+  "stairs-down",
+  "door",
+]);
+
+export function parseIndoorSteps(raw: unknown): IndoorStep[] {
+  if (!Array.isArray(raw)) return [];
+  const parsed: IndoorStep[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const instructionText =
+      typeof obj.instructionText === "string"
+        ? obj.instructionText.trim().slice(0, 240)
+        : "";
+    if (!instructionText) continue;
+    const iconCandidate = obj.directionIcon as IndoorDirectionIcon;
+    const directionIcon: IndoorDirectionIcon = VALID_INDOOR_ICONS.has(
+      iconCandidate,
+    )
+      ? iconCandidate
+      : "straight";
+    const img =
+      typeof obj.landmarkImageUrl === "string" &&
+      obj.landmarkImageUrl.trim().length > 0
+        ? obj.landmarkImageUrl.trim().slice(0, 40000)
+        : undefined;
+    parsed.push({
+      stepNumber: parsed.length + 1,
+      directionIcon,
+      instructionText,
+      ...(img ? { landmarkImageUrl: img } : {}),
+    });
+    if (parsed.length >= 15) break;
+  }
+  return parsed;
+}
+
 export type CampusPlace = Coordinate & {
   id: string;
   name: string;
@@ -22,6 +91,9 @@ export type CampusPlace = Coordinate & {
   closeHour?: number;
   roomsOrDetails?: string;
   imageUrl?: string;
+  isIndoor?: boolean;
+  parentBuildingName?: string;
+  indoorSteps?: IndoorStep[];
   isSeedOverride?: boolean;
 };
 
@@ -36,6 +108,40 @@ export const DEFAULT_CATEGORY_IMAGES: Record<PlaceCategory, string> = {
 
 export function getPlaceImageUrl(place: CampusPlace): string {
   return place.imageUrl?.trim() || DEFAULT_CATEGORY_IMAGES[place.category];
+}
+
+const CORE_NIGHT_SAFETY_IDS = new Set([
+  "clinic",
+  "central-university",
+  "central-plaza",
+  "library",
+  "calbank",
+]);
+
+export function isClinicPlace(place: CampusPlace): boolean {
+  return (
+    place.id === "clinic" ||
+    place.id.startsWith("school-clinic") ||
+    /\b(clinic|health\s*cent(?:er|re)|infirmary|sick\s*bay|medical)\b/i.test(
+      place.name,
+    )
+  );
+}
+
+export function findClinicPlace(places: CampusPlace[]): CampusPlace | undefined {
+  return (
+    places.find((p) => p.id === "clinic") ||
+    places.find((p) => p.id.startsWith("school-clinic")) ||
+    places.find((p) => isClinicPlace(p))
+  );
+}
+
+export function isNightSafetyPlace(place: CampusPlace): boolean {
+  return (
+    CORE_NIGHT_SAFETY_IDS.has(place.id) ||
+    isClinicPlace(place) ||
+    /\b(security|gate|safety)\b/i.test(place.name)
+  );
 }
 
 export const CATEGORY_COLORS: Record<

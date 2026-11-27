@@ -20,3 +20,5 @@
 10. **Forged Timestamp on Create/Update**: Admin sends client-forged `createdAt` != `request.time` -> `PERMISSION_DENIED`.
 11. **Immortal Field Mutation**: Admin changes `createdAt` or `id` on update -> `PERMISSION_DENIED`.
 12. **PII Cross-Read**: Signed-in non-admin user tries to read `/admins/{otherUid}` or `list` `/admins` -> `PERMISSION_DENIED`.
+13. **Indoor Step Array & Payload Abuse**: Admin sends `indoorSteps` with > 15 items, invalid `directionIcon`, or oversized `landmarkImageUrl` (> 40,000 chars) -> `PERMISSION_DENIED`.
+

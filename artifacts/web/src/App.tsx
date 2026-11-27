@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import {
   Activity,
@@ -6,9 +7,13 @@ import {
   ArrowUpDown,
   BookOpen,
   Briefcase,
+  Building2,
   Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Coffee,
+  Compass,
   Copy,
   Crosshair,
   Download,
@@ -29,30 +34,42 @@ import {
   Navigation,
   Pencil,
   Plus,
+  Radar,
   RotateCcw,
   Route,
   Search,
   Send,
-  Share2,
+  ShieldAlert,
   ShieldCheck,
   Star,
   Sun,
   Trash2,
   Upload,
+  WifiOff,
   X,
 } from "lucide-react";
 import { CampusMap } from "@/components/CampusMap";
+import { IndoorGuideOverlay } from "@/components/IndoorGuideOverlay";
+import { IndoorStepBuilder } from "@/components/IndoorStepBuilder";
 import { LeafletCampusMap } from "@/components/LeafletCampusMap";
+import { OfflineCampusModal } from "@/components/OfflineCampusModal";
+import { OfflineIndicator, useOnlineStatus } from "@/components/OfflineIndicator";
+import { ProximityRadarModal } from "@/components/ProximityRadarModal";
+import { PWAInstallButton } from "@/components/PWAInstallButton";
+import { useCompassHeading } from "@/hooks/useCompassHeading";
 import {
   CAMPUS_CENTER,
   CAMPUS_PLACES,
   CATEGORY_COLORS,
   DEFAULT_CATEGORY_IMAGES,
+  findClinicPlace,
   getPlaceImageUrl,
   getPlaceOpenStatus,
   OSM_ATTRIBUTION,
+  parseIndoorSteps,
   type CampusPlace,
   type Coordinate,
+  type IndoorStep,
   type PlaceCategory,
 } from "@/constants/campus";
 import {
@@ -68,7 +85,10 @@ import {
   subscribeCampusPlaces,
   subscribePublicSettings,
 } from "@/lib/firebase";
+import { triggerHaptic } from "@/lib/haptics";
+import { getCampusAtmosphere } from "@/lib/time-atmosphere";
 import {
+  bearingDegrees,
   buildMultiStopRoute,
   distanceMeters,
   estimateWalkingMinutes,
@@ -103,6 +123,7 @@ const SAVED_STORAGE_KEY = "eyecu_saved_place_ids";
 const RECENT_STORAGE_KEY = "eyecu_recent_place_ids";
 const THEME_STORAGE_KEY = "eyecu_theme";
 const MAP_STYLE_STORAGE_KEY = "eyecu_map_style";
+const PLACES_CACHE_STORAGE_KEY = "eyecu_places_cache_v1";
 const ARRIVAL_THRESHOLD_METERS = 20;
 
 const SEED_ID_SET = new Set(CAMPUS_PLACES.map((p) => p.id));
@@ -145,7 +166,11 @@ function readInitialUrlParams() {
       : [];
     return { place, from, stops };
   } catch {
-    return { place: null, from: null, stops: [] as string[] };
+    return {
+      place: null,
+      from: null,
+      stops: [] as string[],
+    };
   }
 }
 
@@ -153,6 +178,8 @@ export function App() {
   const initialUrl = useMemo(() => readInitialUrlParams(), []);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [atmosphere, setAtmosphere] = useState(() => getCampusAtmosphere());
 
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     try {
@@ -179,8 +206,20 @@ export function App() {
     return "schematic";
   });
 
-  // Live Firestore places (both custom additions & seed overrides)
-  const [cloudDocs, setCloudDocs] = useState<CampusPlace[]>([]);
+  // Live Firestore places hydrated from instant offline snapshot cache
+  const [cloudDocs, setCloudDocs] = useState<CampusPlace[]>(() => {
+    try {
+      const raw = globalThis.localStorage?.getItem(PLACES_CACHE_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed as CampusPlace[];
+      }
+    } catch {
+      // Ignore cache error
+    }
+    return [];
+  });
+  const [cloudSyncing, setCloudSyncing] = useState(true);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<CategoryFilter>("All");
   const [sortByNearest, setSortByNearest] = useState(false);
@@ -220,21 +259,39 @@ export function App() {
     return [];
   });
 
-  // Start point & Multi-stop navigation
+  // Start point, Night Walk, & Multi-stop navigation
   const [startSourceId, setStartSourceId] = useState<string>(
     initialUrl.from || "central-university",
   );
   const [routeStopIds, setRouteStopIds] = useState<string[]>(initialUrl.stops);
+  const [nightWalkMode, setNightWalkMode] = useState(false);
   const [gpsCoordinate, setGpsCoordinate] = useState<Coordinate | null>(null);
+  const [gpsHeading, setGpsHeading] = useState<number | null>(null);
   const [isLocating, setIsLocating] = useState(false);
   const [isFollowingGps, setIsFollowingGps] = useState(false);
+  const [followCamera, setFollowCamera] = useState(false);
+  const [routeFitKey, setRouteFitKey] = useState(0);
   const [locationMessage, setLocationMessage] = useState<string | null>(null);
   const [arrivalBanner, setArrivalBanner] = useState<string | null>(null);
-  const [isNavigating, setIsNavigating] = useState(initialUrl.stops.length > 0);
+  const [isNavigating, setIsNavigating] = useState(
+    initialUrl.stops.length > 0,
+  );
   const [arrived, setArrived] = useState(false);
+  const { heading: compassHeading, requestCompassPermission } = useCompassHeading(
+    isNavigating && !arrived,
+  );
   const [copiedCoords, setCopiedCoords] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
   const [mobileDirectoryOpen, setMobileDirectoryOpen] = useState(false);
+  const [cardCollapsed, setCardCollapsed] = useState(false);
+
+  // Proximity Radar, Offline Campus Mode, Card 3D Tilt & Admin GPS Pin states
+  const isOnline = useOnlineStatus();
+  const [offlineModalOpen, setOfflineModalOpen] = useState(false);
+  const [offlinePreviewMode, setOfflinePreviewMode] = useState(false);
+  const [radarOpen, setRadarOpen] = useState(false);
+  const [radarRadiusMeters, setRadarRadiusMeters] = useState(250);
+  const [cardTilt, setCardTilt] = useState({ rx: 0, ry: 0 });
+  const [locatingAdminGps, setLocatingAdminGps] = useState(false);
 
   // Firebase Auth Admin state
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -257,10 +314,23 @@ export function App() {
   const [formOpenDays, setFormOpenDays] = useState("Daily");
   const [formDetails, setFormDetails] = useState("");
   const [formImageUrl, setFormImageUrl] = useState("");
+  const [formIsIndoor, setFormIsIndoor] = useState(false);
+  const [formParentBuilding, setFormParentBuilding] = useState("");
+  const [formIndoorSteps, setFormIndoorSteps] = useState<IndoorStep[]>([]);
   const [placeFormError, setPlaceFormError] = useState<string | null>(null);
   const [placeFormSuccess, setPlaceFormSuccess] = useState<string | null>(null);
   const [savingPlace, setSavingPlace] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingPlaceId, setDeletingPlaceId] = useState<string | null>(null);
+  const [manageQuery, setManageQuery] = useState("");
   const [pickOnMapMode, setPickOnMapMode] = useState(false);
+
+  // Indoor Step-by-Step Guide Overlay state
+  const [indoorGuidePlace, setIndoorGuidePlace] = useState<CampusPlace | null>(
+    null,
+  );
+  const [indoorStepIndex, setIndoorStepIndex] = useState(0);
+  const autoTriggeredIndoorRef = useRef<string | null>(null);
 
   // Place photo lightbox, Report modal, Contact Us modal & Formspree settings
   const [photoLightboxOpen, setPhotoLightboxOpen] = useState(false);
@@ -319,17 +389,41 @@ export function App() {
     }
   }, [mapStyle]);
 
+  // Refresh dynamic Time-of-Day atmosphere every 30s
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setAtmosphere(getCampusAtmosphere());
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
   // Subscribe to real-time Firestore campus_places & public settings
   useEffect(() => {
+    const syncTimer = window.setTimeout(() => setCloudSyncing(false), 900);
     const unsubPlaces = subscribeCampusPlaces(
-      (docs) => setCloudDocs(docs),
-      (errMsg) => setLocationMessage(errMsg),
+      (docs) => {
+        setCloudDocs(docs);
+        setCloudSyncing(false);
+        try {
+          globalThis.localStorage?.setItem(
+            PLACES_CACHE_STORAGE_KEY,
+            JSON.stringify(docs),
+          );
+        } catch {
+          // Ignore cache write errors
+        }
+      },
+      (errMsg) => {
+        setCloudSyncing(false);
+        setLocationMessage(errMsg);
+      },
     );
     const unsubSettings = subscribePublicSettings((endpoint) => {
       setCloudFormspreeEndpoint(endpoint);
       setFormspreeDraft(endpoint);
     });
     return () => {
+      window.clearTimeout(syncTimer);
       unsubPlaces();
       unsubSettings();
     };
@@ -502,7 +596,7 @@ export function App() {
           : place.category === category);
       const matchesQuery =
         q.length === 0 ||
-        `${place.name} ${place.category} ${place.note} ${place.roomsOrDetails ?? ""}`
+        `${place.name} ${place.category} ${place.note} ${place.roomsOrDetails ?? ""} ${place.parentBuildingName ?? ""}`
           .toLocaleLowerCase()
           .includes(q);
       return matchesCat && matchesQuery;
@@ -558,14 +652,31 @@ export function App() {
     return selectedPlace ? [selectedPlace] : [];
   }, [allPlaces, routeStopIds, selectedPlace]);
 
-  const activeRoute = useMemo(
-    () => buildMultiStopRoute(originCoordinate, routeStops),
-    [originCoordinate, routeStops],
-  );
+  const activeRoute = useMemo(() => {
+    return buildMultiStopRoute(originCoordinate, routeStops);
+  }, [originCoordinate, routeStops]);
+
+  const effectiveHeading = useMemo(() => {
+    if (compassHeading !== null) return compassHeading;
+    if (gpsHeading !== null) return gpsHeading;
+    if (isNavigating && activeRoute && activeRoute.coordinates.length >= 2) {
+      return bearingDegrees(
+        activeRoute.coordinates[0]!,
+        activeRoute.coordinates[1]!,
+      );
+    }
+    return null;
+  }, [activeRoute, compassHeading, gpsHeading, isNavigating]);
 
   // Live GPS watchPosition when walking with GPS Follow-Me active
   useEffect(() => {
-    if (!isFollowingGps || !isNavigating || startSourceId !== "gps") return;
+    if (
+      (!isFollowingGps && !followCamera) ||
+      !isNavigating ||
+      startSourceId !== "gps"
+    ) {
+      return;
+    }
     if (!globalThis.navigator?.geolocation) return;
 
     const watchId = globalThis.navigator.geolocation.watchPosition(
@@ -576,17 +687,44 @@ export function App() {
         };
         setGpsCoordinate(nextCoord);
 
+        if (
+          typeof pos.coords.heading === "number" &&
+          Number.isFinite(pos.coords.heading) &&
+          (pos.coords.speed === null || pos.coords.speed > 0.35)
+        ) {
+          setGpsHeading(Math.round(pos.coords.heading));
+        }
+
         const currentTarget = routeStops[0];
         if (currentTarget) {
           const dist = distanceMeters(nextCoord, currentTarget);
           if (dist <= ARRIVAL_THRESHOLD_METERS) {
+            const hasIndoorGuide =
+              Boolean(currentTarget.isIndoor) &&
+              Boolean(currentTarget.indoorSteps?.length);
+
+            if (hasIndoorGuide && autoTriggeredIndoorRef.current !== currentTarget.id) {
+              autoTriggeredIndoorRef.current = currentTarget.id;
+              setIndoorStepIndex(0);
+              setIndoorGuidePlace(currentTarget);
+            }
+
             if (routeStopIds.length > 1) {
-              setArrivalBanner(`Reached ${currentTarget.name}! Heading to next stop.`);
+              setArrivalBanner(
+                hasIndoorGuide
+                  ? `Reached ${currentTarget.parentBuildingName || currentTarget.name}! Follow the indoor guide, then continue.`
+                  : `Reached ${currentTarget.name}! Heading to next stop.`,
+              );
               setRouteStopIds((prev) => prev.slice(1));
             } else {
               setArrived(true);
               setIsFollowingGps(false);
-              setArrivalBanner(`You have arrived at ${currentTarget.name}!`);
+              setFollowCamera(false);
+              setArrivalBanner(
+                hasIndoorGuide
+                  ? `You reached ${currentTarget.parentBuildingName || currentTarget.name}! Indoor guide opened.`
+                  : `You have arrived at ${currentTarget.name}!`,
+              );
             }
           }
         }
@@ -600,7 +738,14 @@ export function App() {
     return () => {
       globalThis.navigator.geolocation.clearWatch(watchId);
     };
-  }, [isFollowingGps, isNavigating, routeStopIds.length, routeStops, startSourceId]);
+  }, [
+    followCamera,
+    isFollowingGps,
+    isNavigating,
+    routeStopIds.length,
+    routeStops,
+    startSourceId,
+  ]);
 
   const toggleSaved = (id: string) => {
     setSavedIds((prev) =>
@@ -608,12 +753,20 @@ export function App() {
     );
   };
 
+  const openIndoorGuide = (place: CampusPlace) => {
+    if (!place.indoorSteps || place.indoorSteps.length === 0) return;
+    setIndoorStepIndex(0);
+    setIndoorGuidePlace(place);
+  };
+
   const selectPlace = (place: CampusPlace, shouldFocus = true) => {
+    triggerHaptic("tap");
     setSelectedPlaceId(place.id);
     setArrived(false);
+    setFollowCamera(false);
+    autoTriggeredIndoorRef.current = null;
     setArrivalBanner(null);
     setCopiedCoords(false);
-    setCopiedLink(false);
     setLocationMessage(null);
     setMobileDirectoryOpen(false);
     if (shouldFocus) {
@@ -660,6 +813,7 @@ export function App() {
   const openAdminForAdd = () => {
     setAdminFormMode("add");
     setEditingPlaceId(null);
+    setConfirmDeleteId(null);
     setFormName("");
     setFormCategory("Academic");
     setFormLat("");
@@ -669,6 +823,9 @@ export function App() {
     setFormOpenDays("Mon–Sat");
     setFormDetails("");
     setFormImageUrl("");
+    setFormIsIndoor(false);
+    setFormParentBuilding("");
+    setFormIndoorSteps([]);
     setPlaceFormError(null);
     setPlaceFormSuccess(null);
     setAuthError(null);
@@ -678,6 +835,7 @@ export function App() {
   const openAdminForEdit = (place: CampusPlace) => {
     setAdminFormMode("edit");
     setEditingPlaceId(place.id);
+    setConfirmDeleteId(null);
     setFormName(place.name);
     setFormCategory(place.category);
     setFormLat(String(place.latitude));
@@ -687,6 +845,9 @@ export function App() {
     setFormOpenDays(place.openDays || "Daily");
     setFormDetails(place.roomsOrDetails || "");
     setFormImageUrl(place.imageUrl || "");
+    setFormIsIndoor(Boolean(place.isIndoor));
+    setFormParentBuilding(place.parentBuildingName || "");
+    setFormIndoorSteps(place.indoorSteps ? [...place.indoorSteps] : []);
     setPlaceFormError(null);
     setPlaceFormSuccess(null);
     setAuthError(null);
@@ -716,6 +877,13 @@ export function App() {
     if (!activeFormspreeUrl) {
       setReportError(
         "Formspree is not configured yet. Sign in to Admin and paste your Formspree endpoint URL (https://formspree.io/f/...) to receive place reports.",
+      );
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setReportError(
+        "You are currently offline. Connect to Wi-Fi or mobile data to submit your report.",
       );
       return;
     }
@@ -776,6 +944,13 @@ export function App() {
     if (!activeFormspreeUrl) {
       setContactError(
         "Formspree is not configured yet. Sign in to Admin and paste your Formspree endpoint URL (https://formspree.io/f/...) to receive Contact Us messages.",
+      );
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setContactError(
+        "You are currently offline. Connect to Wi-Fi or mobile data to send your message.",
       );
       return;
     }
@@ -851,21 +1026,67 @@ export function App() {
     }
   };
 
+  const startWalkingNavigation = () => {
+    void requestCompassPermission();
+    autoTriggeredIndoorRef.current = null;
+    setIsNavigating(true);
+    setCardCollapsed(true);
+    setArrived(false);
+    setArrivalBanner(null);
+    setMapStyle("satellite");
+    if (startSourceId === "gps" && gpsCoordinate) {
+      const target = routeStops[0];
+      if (
+        target &&
+        target.isIndoor &&
+        target.indoorSteps?.length &&
+        distanceMeters(gpsCoordinate, target) <= ARRIVAL_THRESHOLD_METERS
+      ) {
+        autoTriggeredIndoorRef.current = target.id;
+        setArrived(true);
+        setIsFollowingGps(false);
+        setFollowCamera(false);
+        openIndoorGuide(target);
+        setArrivalBanner(
+          `You are right outside ${target.parentBuildingName || target.name}! Indoor guide opened.`,
+        );
+        return;
+      }
+      setIsFollowingGps(true);
+      setFollowCamera(true);
+    } else {
+      setFollowCamera(false);
+      setRouteFitKey((k) => k + 1);
+    }
+  };
+
   const requestUserGps = async () => {
     setIsLocating(true);
     setLocationMessage(null);
+    void requestCompassPermission();
 
     try {
       if (!globalThis.navigator?.geolocation) {
         throw new Error("Location is not available in this browser.");
       }
 
-      const coord = await new Promise<Coordinate>((resolve, reject) => {
+      const result = await new Promise<{
+        coord: Coordinate;
+        heading: number | null;
+      }>((resolve, reject) => {
         globalThis.navigator.geolocation.getCurrentPosition(
           (pos) =>
             resolve({
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude,
+              coord: {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+              },
+              heading:
+                typeof pos.coords.heading === "number" &&
+                Number.isFinite(pos.coords.heading) &&
+                (pos.coords.speed === null || pos.coords.speed > 0.35)
+                  ? Math.round(pos.coords.heading)
+                  : null,
             }),
           (err) => {
             if (err.code === 1) {
@@ -902,12 +1123,18 @@ export function App() {
         );
       });
 
-      setGpsCoordinate(coord);
+      setGpsCoordinate(result.coord);
+      if (result.heading !== null) {
+        setGpsHeading(result.heading);
+      }
       setStartSourceId("gps");
       setIsNavigating(true);
+      setCardCollapsed(true);
       setIsFollowingGps(true);
+      setFollowCamera(true);
+      setMapStyle("satellite");
       setArrived(false);
-      setLocationMessage("Live GPS Follow-Me active.");
+      setLocationMessage("Live Satellite Follow-Me active.");
     } catch (err) {
       setLocationMessage(
         err instanceof Error ? err.message : "Could not get GPS location.",
@@ -928,26 +1155,57 @@ export function App() {
     }
   };
 
-  const handleSharePlaceLink = async (place: CampusPlace) => {
-    try {
-      const shareUrl = new URL(window.location.href);
-      shareUrl.searchParams.set("place", place.id);
-      const urlStr = shareUrl.toString();
+  const handleShareNightWalk = async () => {
+    triggerHaptic("tap");
+    const targetCoord = gpsCoordinate ?? originCoordinate;
+    const coordsText = `${targetCoord.latitude.toFixed(6)}, ${targetCoord.longitude.toFixed(6)}`;
+    const summaryText = `EYE-CU Night-Walk Safety Check-In: I am walking at Central University Miotso${selectedPlace ? ` toward ${selectedPlace.name}` : ""}. Current coordinates: ${coordsText} (https://www.google.com/maps?q=${targetCoord.latitude.toFixed(6)},${targetCoord.longitude.toFixed(6)})`;
 
+    try {
       if (globalThis.navigator?.share) {
         await globalThis.navigator.share({
-          title: `EYE-CU · ${place.name}`,
-          text: `Walk to ${place.name} at Central University Miotso`,
-          url: urlStr,
+          title: "EYE-CU · Live Night Walk",
+          text: summaryText,
         });
       } else if (globalThis.navigator?.clipboard) {
-        await globalThis.navigator.clipboard.writeText(urlStr);
-        setCopiedLink(true);
-        setTimeout(() => setCopiedLink(false), 2000);
+        await globalThis.navigator.clipboard.writeText(summaryText);
+        setLocationMessage("Night-Walk live safety coordinates copied to clipboard!");
       }
     } catch {
       // Ignore cancelled native share
     }
+  };
+
+  const handlePinAdminCurrentGps = () => {
+    const geo = globalThis.navigator?.geolocation;
+    if (!geo) {
+      setPlaceFormError("Geolocation is unavailable in this browser.");
+      return;
+    }
+    triggerHaptic("tap");
+    setLocatingAdminGps(true);
+    setPlaceFormError(null);
+    geo.getCurrentPosition(
+      (pos) => {
+        setLocatingAdminGps(false);
+        const lat = Number(pos.coords.latitude.toFixed(6));
+        const lon = Number(pos.coords.longitude.toFixed(6));
+        setFormLat(String(lat));
+        setFormLon(String(lon));
+        setGpsCoordinate({ latitude: lat, longitude: lon });
+        setPlaceFormSuccess(
+          `Pinned your live GPS (${lat}, ${lon})! Tap Save below to publish.`,
+        );
+        triggerHaptic("step");
+      },
+      () => {
+        setLocatingAdminGps(false);
+        setPlaceFormError(
+          "Could not read GPS signal. Enable Location access or use Pick on Map.",
+        );
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 },
+    );
   };
 
   const handleGoogleAdminSignIn = async () => {
@@ -963,9 +1221,22 @@ export function App() {
         );
       }
     } catch (err) {
-      setAuthError(
-        err instanceof Error ? err.message : "Google Sign-In failed. Try again.",
-      );
+      const msg = err instanceof Error ? err.message : "";
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        setAuthError(
+          "You are currently offline. Connect to Wi-Fi or mobile data to sign in as Admin.",
+        );
+      } else if (msg.includes("auth/network-request-failed")) {
+        setAuthError(
+          "Could not reach Firebase Auth (auth/network-request-failed). Check your internet connection, disable ad-blockers/Brave Shields for this site, or verify your Firebase API key restrictions allow this domain.",
+        );
+      } else if (msg.includes("auth/unauthorized-domain")) {
+        setAuthError(
+          "This domain is not listed under Firebase Console → Authentication → Settings → Authorized domains.",
+        );
+      } else {
+        setAuthError(msg || "Google Sign-In failed. Try again.");
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -993,41 +1264,76 @@ export function App() {
       return;
     }
 
+    if (
+      formIsIndoor &&
+      formIndoorSteps.some((step) => step.instructionText.trim().length === 0)
+    ) {
+      setPlaceFormError(
+        "Fill in or delete any blank indoor step instructions before saving.",
+      );
+      return;
+    }
+
+    const cleanIndoorSteps = formIsIndoor
+      ? parseIndoorSteps(formIndoorSteps)
+      : [];
+
     setSavingPlace(true);
+    const targetId =
+      adminFormMode === "edit" && editingPlaceId
+        ? editingPlaceId
+        : makeCampusPlaceId(formName);
+
+    const isSeedOverride = SEED_ID_SET.has(targetId);
+    const existingPlace = allPlaces.find((p) => p.id === targetId);
+    const nextPlacePayload: Omit<CampusPlace, "id"> = {
+      name: formName.trim(),
+      category: formCategory,
+      latitude,
+      longitude,
+      note:
+        formNote.trim() ||
+        existingPlace?.note ||
+        "Campus directory location",
+      hours: formHours.trim() || existingPlace?.hours || "",
+      openDays: formOpenDays.trim() || existingPlace?.openDays || "Daily",
+      openHour: existingPlace?.openHour ?? -1,
+      closeHour: existingPlace?.closeHour ?? -1,
+      roomsOrDetails:
+        formDetails.trim() || existingPlace?.roomsOrDetails || "",
+      imageUrl: formImageUrl.trim(),
+      isIndoor: formIsIndoor,
+      parentBuildingName: formIsIndoor ? formParentBuilding.trim() : "",
+      indoorSteps: cleanIndoorSteps,
+    };
+    const optimisticPlace: CampusPlace = {
+      ...nextPlacePayload,
+      id: targetId,
+      isSeedOverride,
+    };
+    const previousCloudDocs = cloudDocs;
+
+    setCloudDocs((prev) => {
+      const idx = prev.findIndex((p) => p.id === targetId);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = optimisticPlace;
+        return next;
+      }
+      return [...prev, optimisticPlace];
+    });
+    setSelectedPlaceId(targetId);
+    setFocusKey((k) => k + 1);
+
     try {
-      const targetId =
-        adminFormMode === "edit" && editingPlaceId
-          ? editingPlaceId
-          : makeCampusPlaceId(formName);
-
-      const isSeedOverride = SEED_ID_SET.has(targetId);
-      const existingPlace = allPlaces.find((p) => p.id === targetId);
-
       const saved = await saveCampusPlaceToCloud(
         targetId,
-        {
-          name: formName.trim(),
-          category: formCategory,
-          latitude,
-          longitude,
-          note:
-            formNote.trim() ||
-            existingPlace?.note ||
-            "Campus directory location",
-          hours: formHours.trim() || existingPlace?.hours || "",
-          openDays: formOpenDays.trim() || existingPlace?.openDays || "Daily",
-          openHour: existingPlace?.openHour ?? -1,
-          closeHour: existingPlace?.closeHour ?? -1,
-          roomsOrDetails:
-            formDetails.trim() || existingPlace?.roomsOrDetails || "",
-          imageUrl: formImageUrl.trim(),
-        },
+        nextPlacePayload,
         isSeedOverride,
         authUser,
       );
 
       setSelectedPlaceId(saved.id);
-      setFocusKey((k) => k + 1);
 
       if (adminFormMode === "edit") {
         setPlaceFormSuccess(`Saved "${saved.name}" live to Cloud Firestore.`);
@@ -1039,9 +1345,13 @@ export function App() {
         setFormNote("");
         setFormDetails("");
         setFormImageUrl("");
+        setFormIsIndoor(false);
+        setFormParentBuilding("");
+        setFormIndoorSteps([]);
         setPlaceFormSuccess(`Added "${saved.name}" live to Cloud Firestore.`);
       }
     } catch (err) {
+      setCloudDocs(previousCloudDocs);
       setPlaceFormError(
         err instanceof Error ? err.message : "Could not save place to cloud.",
       );
@@ -1052,6 +1362,30 @@ export function App() {
 
   const handleDragPinEnd = async (place: CampusPlace, coord: Coordinate) => {
     if (!authUser || !isCloudAdmin) return;
+    const isSeedOverride = SEED_ID_SET.has(place.id);
+    const updatedPlace: CampusPlace = {
+      ...place,
+      latitude: coord.latitude,
+      longitude: coord.longitude,
+      isSeedOverride,
+    };
+    const previousCloudDocs = cloudDocs;
+
+    setCloudDocs((prev) => {
+      const idx = prev.findIndex((p) => p.id === place.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = updatedPlace;
+        return next;
+      }
+      return [...prev, updatedPlace];
+    });
+    setSelectedPlaceId(place.id);
+    if (editingPlaceId === place.id) {
+      setFormLat(String(coord.latitude));
+      setFormLon(String(coord.longitude));
+    }
+
     try {
       const saved = await saveCampusPlaceToCloud(
         place.id,
@@ -1060,7 +1394,7 @@ export function App() {
           latitude: coord.latitude,
           longitude: coord.longitude,
         },
-        SEED_ID_SET.has(place.id),
+        isSeedOverride,
         authUser,
       );
       setSelectedPlaceId(saved.id);
@@ -1068,6 +1402,11 @@ export function App() {
         `Saved "${saved.name}" pin at ${coord.latitude.toFixed(5)}, ${coord.longitude.toFixed(5)}`,
       );
     } catch (err) {
+      setCloudDocs(previousCloudDocs);
+      if (editingPlaceId === place.id) {
+        setFormLat(String(place.latitude));
+        setFormLon(String(place.longitude));
+      }
       setLocationMessage(
         err instanceof Error ? err.message : "Failed to save dragged pin.",
       );
@@ -1076,27 +1415,51 @@ export function App() {
 
   const handleDeleteOrResetPlace = async (id: string) => {
     if (!authUser || !isCloudAdmin) return;
+    const targetPlace = allPlaces.find((p) => p.id === id);
+    const previousCloudDocs = cloudDocs;
+    setDeletingPlaceId(id);
+    setPlaceFormError(null);
+    setPlaceFormSuccess(null);
+    setCloudDocs((prev) => prev.filter((p) => p.id !== id));
+
     try {
       await deleteCampusPlaceFromCloud(id);
       if (SEED_ID_SET.has(id)) {
-        setPlaceFormSuccess("Reset pin to original campus coordinates.");
         const seed = CAMPUS_PLACES.find((p) => p.id === id);
         if (seed && editingPlaceId === id) {
           openAdminForEdit(seed);
         }
+        const msg = `Reset "${seed?.name ?? "pin"}" to original campus coordinates.`;
+        setPlaceFormSuccess(msg);
+        setLocationMessage(msg);
       } else {
-        setPlaceFormSuccess("Deleted custom place from Cloud Firestore.");
+        setRouteStopIds((prev) => prev.filter((stopId) => stopId !== id));
+        setSavedIds((prev) => prev.filter((savedId) => savedId !== id));
+        setRecentIds((prev) => prev.filter((recentId) => recentId !== id));
+        if (startSourceId === id) {
+          setStartSourceId("central-university");
+        }
+        if (indoorGuidePlace?.id === id) {
+          setIndoorGuidePlace(null);
+        }
         if (selectedPlaceId === id) {
           setSelectedPlaceId(CAMPUS_PLACES[0]?.id ?? "central-university");
         }
         if (editingPlaceId === id) {
           openAdminForAdd();
         }
+        const msg = `Deleted "${targetPlace?.name ?? "custom place"}" from Cloud Firestore.`;
+        setPlaceFormSuccess(msg);
+        setLocationMessage(msg);
       }
     } catch (err) {
+      setCloudDocs(previousCloudDocs);
       setPlaceFormError(
         err instanceof Error ? err.message : "Could not remove place.",
       );
+    } finally {
+      setDeletingPlaceId(null);
+      setConfirmDeleteId(null);
     }
   };
 
@@ -1179,6 +1542,12 @@ export function App() {
                 : undefined,
             imageUrl:
               typeof obj.imageUrl === "string" ? obj.imageUrl : undefined,
+            isIndoor: Boolean(obj.isIndoor),
+            parentBuildingName:
+              typeof obj.parentBuildingName === "string"
+                ? obj.parentBuildingName
+                : undefined,
+            indoorSteps: parseIndoorSteps(obj.indoorSteps),
           });
         }
       }
@@ -1254,7 +1623,10 @@ export function App() {
     : "var(--secondary)";
 
   return (
-    <div className="app-shell">
+    <div
+      className={`app-shell${nightWalkMode ? " night-walk-active" : ""}`}
+      data-atmosphere={atmosphere.period}
+    >
       {/* Left Directory Sidebar (Desktop) / Slide-up Sheet (Mobile) */}
       <aside
         className={`directory-panel${mobileDirectoryOpen ? " is-mobile-open" : ""}`}
@@ -1266,6 +1638,7 @@ export function App() {
             <h1 className="brand-title">EYE-CU</h1>
           </div>
           <div className="header-actions">
+            <PWAInstallButton />
             <button
               type="button"
               aria-label="Contact EYE-CU customer support"
@@ -1419,6 +1792,42 @@ export function App() {
             </div>
           ) : null}
 
+          <div className="campus-tools-row" aria-label="Smart campus tools">
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic("tap");
+                setRadarOpen(true);
+              }}
+              className={`campus-tool-btn${radarOpen ? " is-active" : ""}`}
+            >
+              <Radar size={13} />
+              <span>Around Me</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic("step");
+                setNightWalkMode((prev) => !prev);
+              }}
+              className={`campus-tool-btn${nightWalkMode ? " is-night-active" : ""}`}
+            >
+              <ShieldAlert size={13} />
+              <span>Night Walk</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic("tap");
+                setOfflineModalOpen(true);
+              }}
+              className={`campus-tool-btn${offlinePreviewMode || !isOnline ? " is-active" : ""}`}
+            >
+              <WifiOff size={13} />
+              <span>Offline Map</span>
+            </button>
+          </div>
+
           <div className="start-point-row">
             <label className="start-select-wrap">
               <span className="start-select-label">From</span>
@@ -1482,8 +1891,20 @@ export function App() {
         </div>
 
         <div className="directory-list">
-          {visiblePlaces.length > 0 ? (
-            visiblePlaces.map((place) => {
+          {cloudSyncing && visiblePlaces.length === 0 ? (
+            <div className="directory-skeleton-list" aria-hidden="true">
+              {[0, 1, 2, 3, 4].map((idx) => (
+                <div key={`skel-${idx}`} className="skeleton-place-row">
+                  <div className="skeleton-box" />
+                  <div className="skeleton-lines">
+                    <div className="shimmer-line is-wide" />
+                    <div className="shimmer-line is-mid" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : visiblePlaces.length > 0 ? (
+            visiblePlaces.map((place, rowIndex) => {
               const isSelected = selectedPlace?.id === place.id;
               const isSaved = savedIds.includes(place.id);
               const dist = distanceMeters(originCoordinate, place);
@@ -1497,7 +1918,11 @@ export function App() {
                 : CATEGORY_COLORS[place.category].bgLight;
 
               return (
-                <div key={place.id} className="place-row-wrap">
+                <div
+                  key={place.id}
+                  className="place-row-wrap row-stagger"
+                  style={{ "--row-delay": `${Math.min(rowIndex, 10) * 24}ms` } as React.CSSProperties}
+                >
                   <button
                     type="button"
                     onClick={() => selectPlace(place, true)}
@@ -1530,6 +1955,9 @@ export function App() {
                             ? "Start point"
                             : `${formatDistance(dist)} · ${mins} min`}
                         </span>
+                        {place.isIndoor && place.indoorSteps?.length
+                          ? ` · Indoor (${place.indoorSteps.length})`
+                          : ""}
                       </span>
                     </span>
                   </button>
@@ -1540,7 +1968,10 @@ export function App() {
                         ? `Remove ${place.name} from saved`
                         : `Save ${place.name}`
                     }
-                    onClick={() => toggleSaved(place.id)}
+                    onClick={() => {
+                      triggerHaptic("tap");
+                      toggleSaved(place.id);
+                    }}
                     className={`row-star-btn${isSaved ? " is-saved" : ""}`}
                   >
                     <Star
@@ -1570,7 +2001,11 @@ export function App() {
             routeStopIds={routeStopIds}
             originCoordinate={originCoordinate}
             isLiveGps={startSourceId === "gps" && gpsCoordinate !== null}
-            darkMode={darkMode}
+            headingDegrees={effectiveHeading}
+            isNavigating={isNavigating && !arrived}
+            darkMode={darkMode || nightWalkMode}
+            nightWalkMode={nightWalkMode}
+            radarRadiusMeters={radarOpen ? radarRadiusMeters : null}
             focusKey={focusKey}
             recenterKey={recenterKey}
             routeCoordinates={
@@ -1603,7 +2038,14 @@ export function App() {
             routeStopIds={routeStopIds}
             originCoordinate={originCoordinate}
             isLiveGps={startSourceId === "gps" && gpsCoordinate !== null}
-            darkMode={darkMode}
+            headingDegrees={effectiveHeading}
+            isNavigating={isNavigating && !arrived}
+            followCamera={followCamera}
+            isCardCollapsed={cardCollapsed}
+            routeFitKey={routeFitKey}
+            darkMode={darkMode || nightWalkMode}
+            nightWalkMode={nightWalkMode}
+            radarRadiusMeters={radarOpen ? radarRadiusMeters : null}
             focusKey={focusKey}
             recenterKey={recenterKey}
             routeCoordinates={
@@ -1625,16 +2067,35 @@ export function App() {
               setPickOnMapMode(false);
               setAdminOpen(true);
             }}
-            onRecenter={() => setRecenterKey((k) => k + 1)}
+            onRecenter={() => {
+              setFollowCamera(false);
+              setRecenterKey((k) => k + 1);
+            }}
+            onUserPanMap={() => setFollowCamera(false)}
+            onFollowCamera={() => {
+              void requestCompassPermission();
+              setMapStyle("satellite");
+              if (startSourceId === "gps") {
+                setIsFollowingGps(true);
+              }
+              setFollowCamera(true);
+            }}
+            onFitRoute={() => {
+              setFollowCamera(false);
+              setRouteFitKey((k) => k + 1);
+            }}
           />
         )}
 
-        {/* Map Style Switcher & Admin Drag Pin Toggle */}
+        {/* Map Style Switcher, Mobile Tools & Admin Drag Pin Toggle */}
         <div className="map-toolbar-top">
           <div className="map-style-switch" role="group" aria-label="Map layer style">
             <button
               type="button"
-              onClick={() => setMapStyle("schematic")}
+              onClick={() => {
+                triggerHaptic("tap");
+                setMapStyle("schematic");
+              }}
               className={`map-style-btn${mapStyle === "schematic" ? " active" : ""}`}
             >
               <Layers size={13} />
@@ -1642,7 +2103,10 @@ export function App() {
             </button>
             <button
               type="button"
-              onClick={() => setMapStyle("street")}
+              onClick={() => {
+                triggerHaptic("tap");
+                setMapStyle("street");
+              }}
               className={`map-style-btn${mapStyle === "street" ? " active" : ""}`}
             >
               <MapIcon size={13} />
@@ -1650,11 +2114,50 @@ export function App() {
             </button>
             <button
               type="button"
-              onClick={() => setMapStyle("satellite")}
+              onClick={() => {
+                triggerHaptic("tap");
+                setMapStyle("satellite");
+              }}
               className={`map-style-btn${mapStyle === "satellite" ? " active" : ""}`}
             >
               <Globe size={13} />
               <span>Satellite</span>
+            </button>
+          </div>
+
+          <div className="mobile-map-tools" aria-label="Quick campus tools">
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic("tap");
+                setRadarOpen(true);
+              }}
+              className={`campus-tool-btn${radarOpen ? " is-active" : ""}`}
+            >
+              <Radar size={13} />
+              <span>Near</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic("step");
+                setNightWalkMode((prev) => !prev);
+              }}
+              className={`campus-tool-btn${nightWalkMode ? " is-night-active" : ""}`}
+            >
+              <ShieldAlert size={13} />
+              <span>Night</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic("tap");
+                setOfflineModalOpen(true);
+              }}
+              className={`campus-tool-btn${offlinePreviewMode || !isOnline ? " is-active" : ""}`}
+            >
+              <WifiOff size={13} />
+              <span>Offline</span>
             </button>
           </div>
 
@@ -1676,6 +2179,7 @@ export function App() {
           <div className="mobile-bar">
             <span className="mobile-brand">EYE-CU</span>
             <div className="mobile-bar-actions">
+              <PWAInstallButton compact />
               <button
                 type="button"
                 aria-label="Contact EYE-CU customer support"
@@ -1709,10 +2213,10 @@ export function App() {
                 type="button"
                 aria-label="Open admin section"
                 onClick={() => setAdminOpen(true)}
-                className={`admin-trigger${isCloudAdmin ? " is-signed-in" : ""}`}
+                className={`admin-trigger mobile-admin-trigger${isCloudAdmin ? " is-signed-in" : ""}`}
               >
                 <ShieldCheck size={15} />
-                <span>Admin</span>
+                <span className="mobile-admin-label">Admin</span>
               </button>
             </div>
           </div>
@@ -1740,323 +2244,681 @@ export function App() {
           </div>
         ) : null}
 
-        {/* Floating Place & In-App Walking Guidance Card */}
-        {selectedPlace && !pickOnMapMode ? (
-          <section
-            className="place-card"
-            aria-label="Selected place and walking guidance"
-          >
-            <button
-              type="button"
-              className="card-photo-banner"
-              onClick={() => setPhotoLightboxOpen(true)}
-              aria-label={`View full photo of ${selectedPlace.name}`}
+        {/* Smart Floating HUD Banner (Night-Walk Safety Mode) */}
+        {nightWalkMode ? (
+          <div className="map-hud-banners">
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="hud-alert-banner is-night"
             >
-              <img
-                src={getPlaceImageUrl(selectedPlace)}
-                alt={selectedPlace.name}
-                className="card-photo-img"
-                loading="lazy"
-                onError={(e) => {
-                  const fallback = DEFAULT_CATEGORY_IMAGES[selectedPlace.category];
-                  if (!e.currentTarget.src.endsWith(fallback)) {
-                    e.currentTarget.src = fallback;
+              <ShieldAlert size={16} style={{ flexShrink: 0 }} />
+              <div className="hud-alert-copy">
+                <strong>Night-Walk Safety Active</strong>
+                <span>Lit walkways, Clinic & Security Gate highlighted</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleShareNightWalk()}
+                className="hud-alert-cta"
+              >
+                Share Live Walk
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const clinic = findClinicPlace(allPlaces);
+                  if (clinic) {
+                    setQuery("");
+                    setCategory("All");
+                    setRouteStopIds([]);
+                    selectPlace(clinic, true);
+                    setIsNavigating(true);
+                    setCardCollapsed(true);
+                    setLocationMessage(`Night-Walk clinic route: ${clinic.name}`);
+                  } else {
+                    setLocationMessage(
+                      "No clinic location found yet. Add a Clinic pin in Admin.",
+                    );
                   }
                 }}
-              />
-              <div className="card-photo-caption">
-                <span className="card-photo-tag">
-                  <ImageIcon size={12} />
-                  <span>
-                    {selectedPlace.imageUrl
-                      ? "Place Photo"
-                      : `${selectedPlace.category} Preview`}
-                  </span>
-                </span>
-                <span className="card-photo-tag">
-                  <Maximize2 size={12} />
-                </span>
-              </div>
-            </button>
-
-            <div className="place-card-header">
-              <div
-                className="card-icon"
-                style={{ backgroundColor: selectedBg, color: selectedColor }}
+                className="hud-alert-cta is-subtle"
               >
-                <CategoryIcon category={selectedPlace.category} size={20} />
-              </div>
-              <div className="card-copy">
-                <div className="card-meta-line">
-                  <span style={{ color: selectedColor }}>
-                    {selectedPlace.category}
-                  </span>
-                  {selectedOpenStatus ? (
-                    <span
-                      className={`card-open-status is-${selectedOpenStatus.tone}`}
-                    >
-                      {selectedOpenStatus.label}
-                    </span>
-                  ) : null}
-                </div>
-                <h2 className="card-title">{selectedPlace.name}</h2>
-                <p className="card-subtitle">{selectedPlace.note}</p>
-                {selectedPlace.roomsOrDetails ? (
-                  <p className="card-details-line">
-                    {selectedPlace.roomsOrDetails}
-                  </p>
-                ) : null}
-              </div>
-              <div className="card-icon-actions">
-                <button
-                  type="button"
-                  aria-label="Share place link"
-                  title="Share direct campus link"
-                  onClick={() => void handleSharePlaceLink(selectedPlace)}
-                  className="card-action-icon-btn"
-                >
-                  {copiedLink ? <Check size={16} /> : <Share2 size={16} />}
-                </button>
-                <button
-                  type="button"
-                  aria-label="Copy place coordinates"
-                  title="Copy coordinates"
-                  onClick={() => void handleCopyCoordinates(selectedPlace)}
-                  className="card-action-icon-btn"
-                >
-                  {copiedCoords ? <Check size={16} /> : <Copy size={16} />}
-                </button>
-                <button
-                  type="button"
-                  aria-label={
-                    savedIds.includes(selectedPlace.id)
-                      ? "Remove from saved places"
-                      : "Save place"
-                  }
-                  onClick={() => toggleSaved(selectedPlace.id)}
-                  className={`card-action-icon-btn${savedIds.includes(selectedPlace.id) ? " is-saved" : ""}`}
-                >
-                  <Star
-                    size={17}
-                    fill={
-                      savedIds.includes(selectedPlace.id)
-                        ? "currentColor"
-                        : "none"
-                    }
-                  />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Report an issue with ${selectedPlace.name}`}
-                  title="Report wrong pin or place issue"
-                  onClick={openReportModal}
-                  className="card-report-btn"
-                  data-testid="report-place-btn"
-                >
-                  <AlertTriangle size={17} />
-                </button>
-              </div>
-            </div>
+                Clinic
+              </button>
+            </motion.div>
+          </div>
+        ) : null}
 
-            {routeStopIds.length > 0 ? (
-              <div className="multi-stop-strip" aria-label="Multi-stop route itinerary">
-                <div className="multi-stop-header">
-                  <span>
-                    <Route
-                      size={12}
-                      style={{ verticalAlign: "middle", marginRight: 4 }}
-                    />
-                    Multi-Stop Route ({routeStopIds.length}/4)
-                  </span>
+        {/* Floating Place & In-App Walking Guidance Card */}
+        {selectedPlace && !pickOnMapMode ? (
+          <motion.section
+            layout
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ type: "spring", stiffness: 320, damping: 28 }}
+            className={`place-card glass-hud${cardCollapsed ? " is-collapsed" : ""}`}
+            aria-label="Selected place and walking guidance"
+            style={
+              !cardCollapsed && (cardTilt.rx !== 0 || cardTilt.ry !== 0)
+                ? {
+                    transform: `perspective(1000px) rotateX(${cardTilt.rx}deg) rotateY(${cardTilt.ry}deg)`,
+                  }
+                : undefined
+            }
+          >
+            {cardCollapsed ? (
+              <>
+                <div className="collapsed-card-top">
+                  <div className="collapsed-card-main">
+                    <div
+                      className="collapsed-card-icon"
+                      style={{ backgroundColor: selectedBg, color: selectedColor }}
+                    >
+                      <CategoryIcon category={selectedPlace.category} size={17} />
+                    </div>
+                    <div className="collapsed-card-copy">
+                      <h2 className="collapsed-card-title">{selectedPlace.name}</h2>
+                      <p className="collapsed-card-sub tabular-nums">
+                        {isNavigating && activeRoute
+                          ? arrived
+                            ? "Arrived at destination"
+                            : `${formatDistance(activeRoute.distanceMeters)} · ${estimateWalkingMinutes(activeRoute.distanceMeters)} min walk`
+                          : `${selectedPlace.category}${selectedPlace.isIndoor ? ` · ${selectedPlace.parentBuildingName || "Indoor"}` : ""}${selectedOpenStatus ? ` · ${selectedOpenStatus.label}` : ""}`}
+                      </p>
+                    </div>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setRouteStopIds([])}
-                    className="multi-stop-clear"
+                    aria-label="Expand place details"
+                    title="Expand full details & steps"
+                    onClick={() => setCardCollapsed(false)}
+                    className="card-collapse-pill"
+                    data-testid="toggle-place-card"
                   >
-                    Clear stops
+                    <ChevronUp size={15} />
+                    <span>Expand</span>
                   </button>
                 </div>
-                <div className="multi-stop-list">
-                  {routeStopIds.map((stopId, idx) => {
-                    const stopPlace = allPlaces.find((p) => p.id === stopId);
-                    if (!stopPlace) return null;
-                    return (
-                      <span key={`stop-${stopId}`} className="stop-chip">
-                        <strong className="tabular-nums">{idx + 1}.</strong>
-                        <span>{stopPlace.name}</span>
-                        <button
-                          type="button"
-                          aria-label={`Remove ${stopPlace.name} stop`}
-                          onClick={() => toggleStopInRoute(stopId)}
-                          className="stop-chip-remove"
-                        >
-                          <X size={12} />
-                        </button>
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null}
 
-            {isNavigating && activeRoute ? (
-              <div className="walk-guidance-box">
-                <div className="walk-guidance-top">
-                  <div className="walk-metrics">
-                    <span className="walk-distance tabular-nums">
-                      {arrived
-                        ? "Arrived"
-                        : formatDistance(activeRoute.distanceMeters)}
+                {isNavigating && activeRoute && !arrived && activeRoute.steps[0] ? (
+                  <div className="collapsed-next-strip">
+                    <span className="collapsed-next-text">
+                      <Navigation size={12} color="#1A73E8" style={{ flexShrink: 0 }} />
+                      <span>Next: {activeRoute.steps[0].instruction}</span>
                     </span>
-                    {!arrived ? (
-                      <span className="walk-eta tabular-nums">
-                        {estimateWalkingMinutes(activeRoute.distanceMeters)} min
-                        walk
+                    {activeRoute.steps[0].distanceMeters > 0 ? (
+                      <span className="walk-next-dist tabular-nums">
+                        {formatDistance(activeRoute.steps[0].distanceMeters)}
                       </span>
                     ) : null}
                   </div>
-                  <span className="walk-status-text">
-                    {arrived
-                      ? "Destination reached"
-                      : activeRoute.routeType === "mapped"
-                        ? "Mapped walkway route"
-                        : "Direct campus estimate"}
-                  </span>
-                </div>
-
-                {!arrived && activeRoute.steps.length > 0 ? (
-                  <ol className="walk-steps-list">
-                    {activeRoute.steps.map((step, index) => (
-                      <li key={index} className="walk-step-item">
-                        <span>
-                          {index + 1}. {step.instruction}
-                        </span>
-                        {step.distanceMeters > 0 ? (
-                          <span className="walk-step-dist tabular-nums">
-                            {formatDistance(step.distanceMeters)}
-                          </span>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ol>
                 ) : null}
 
-                <div className="gps-origin-row">
-                  <span>
-                    From:{" "}
-                    <strong>
-                      {startSourceId === "gps" && gpsCoordinate
-                        ? "My Live GPS Location"
-                        : allPlaces.find((p) => p.id === startSourceId)?.name ||
-                          "Central University Gate"}
-                    </strong>
-                  </span>
-                  {startSourceId !== "gps" || !gpsCoordinate ? (
+                <div className="collapsed-actions-bar">
+                  {!isNavigating ? (
                     <button
                       type="button"
-                      onClick={() => void requestUserGps()}
-                      disabled={isLocating}
-                      className="gps-enable-inline"
+                      onClick={startWalkingNavigation}
+                      className="collapsed-action-btn is-primary"
                     >
-                      {isLocating ? "Locating…" : "Use my current location"}
+                      <Navigation size={14} />
+                      <span>Walk Here</span>
+                    </button>
+                  ) : (
+                    <>
+                      {!arrived ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void requestCompassPermission();
+                              setMapStyle("satellite");
+                              if (startSourceId === "gps") {
+                                setIsFollowingGps(true);
+                              }
+                              setFollowCamera(true);
+                            }}
+                            className={`collapsed-action-btn${followCamera && mapStyle === "satellite" ? " is-active" : ""}`}
+                          >
+                            <Compass size={13} />
+                            <span>Follow Me</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFollowCamera(false);
+                              if (mapStyle === "schematic") {
+                                setMapStyle("satellite");
+                              }
+                              setRouteFitKey((k) => k + 1);
+                            }}
+                            className="collapsed-action-btn"
+                          >
+                            <Route size={13} />
+                            <span>Full Route</span>
+                          </button>
+                        </>
+                      ) : null}
+
+                      {selectedPlace.isIndoor &&
+                      selectedPlace.indoorSteps &&
+                      selectedPlace.indoorSteps.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => openIndoorGuide(selectedPlace)}
+                          className="collapsed-action-btn indoor-cta"
+                          data-testid="start-indoor-guide"
+                        >
+                          <Building2 size={14} />
+                          <span>Indoor Guide</span>
+                        </button>
+                      ) : null}
+
+                      {!arrived ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setArrived(true);
+                            setIsFollowingGps(false);
+                            setFollowCamera(false);
+                            if (
+                              selectedPlace.isIndoor &&
+                              selectedPlace.indoorSteps?.length
+                            ) {
+                              autoTriggeredIndoorRef.current = selectedPlace.id;
+                              openIndoorGuide(selectedPlace);
+                              setArrivalBanner(
+                                `Reached ${selectedPlace.parentBuildingName || selectedPlace.name}! Indoor guide opened.`,
+                              );
+                            } else {
+                              setArrivalBanner(
+                                `You have arrived at ${selectedPlace.name}!`,
+                              );
+                            }
+                          }}
+                          className="collapsed-action-btn is-primary"
+                        >
+                          <CheckCircle2 size={14} />
+                          <span>Arrived</span>
+                        </button>
+                      ) : null}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsNavigating(false);
+                          setIsFollowingGps(false);
+                          setFollowCamera(false);
+                          setCardCollapsed(false);
+                          autoTriggeredIndoorRef.current = null;
+                          setArrived(false);
+                          setArrivalBanner(null);
+                        }}
+                        className="collapsed-action-btn is-stop"
+                      >
+                        <X size={14} />
+                        <span>Stop</span>
+                      </button>
+                    </>
+                  )}
+
+                  {!isNavigating &&
+                  selectedPlace.isIndoor &&
+                  selectedPlace.indoorSteps &&
+                  selectedPlace.indoorSteps.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => openIndoorGuide(selectedPlace)}
+                      className="collapsed-action-btn indoor-cta"
+                      data-testid="start-indoor-guide"
+                    >
+                      <Building2 size={14} />
+                      <span>Indoor Guide</span>
                     </button>
                   ) : null}
                 </div>
-              </div>
-            ) : null}
-
-            <div className="card-actions-row">
-              {!isNavigating ? (
+              </>
+            ) : (
+              <>
                 <button
                   type="button"
+                  className="card-photo-banner"
                   onClick={() => {
-                    setIsNavigating(true);
-                    setArrived(false);
-                    setArrivalBanner(null);
+                    triggerHaptic("tap");
+                    setPhotoLightboxOpen(true);
                   }}
-                  className="primary-cta"
+                  onMouseMove={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const x = (e.clientX - rect.left) / rect.width - 0.5;
+                    const y = (e.clientY - rect.top) / rect.height - 0.5;
+                    setCardTilt({
+                      rx: Number((-y * 4.5).toFixed(2)),
+                      ry: Number((x * 5.5).toFixed(2)),
+                    });
+                  }}
+                  onMouseLeave={() => setCardTilt({ rx: 0, ry: 0 })}
+                  aria-label={`View full photo of ${selectedPlace.name}`}
                 >
-                  <Navigation size={15} />
-                  <span>Walk Here</span>
+                  <img
+                    src={getPlaceImageUrl(selectedPlace)}
+                    alt={selectedPlace.name}
+                    className="card-photo-img"
+                    loading="lazy"
+                    onError={(e) => {
+                      const fallback = DEFAULT_CATEGORY_IMAGES[selectedPlace.category];
+                      if (!e.currentTarget.src.endsWith(fallback)) {
+                        e.currentTarget.src = fallback;
+                      }
+                    }}
+                  />
+                  <div className="card-photo-caption">
+                    <span className="card-photo-tag">
+                      <ImageIcon size={12} />
+                      <span>
+                        {selectedPlace.imageUrl
+                          ? "Place Photo"
+                          : `${selectedPlace.category} Preview`}
+                      </span>
+                    </span>
+                    <span className="card-photo-tag">
+                      <Maximize2 size={12} />
+                    </span>
+                  </div>
                 </button>
-              ) : (
-                <>
-                  {!arrived ? (
+
+                <div className="place-card-header">
+                  <div
+                    className="card-icon"
+                    style={{ backgroundColor: selectedBg, color: selectedColor }}
+                  >
+                    <CategoryIcon category={selectedPlace.category} size={20} />
+                  </div>
+                  <div className="card-copy">
+                    <div className="card-meta-line">
+                      <span style={{ color: selectedColor }}>
+                        {selectedPlace.category}
+                      </span>
+                      {selectedOpenStatus ? (
+                        <span
+                          className={`card-open-status is-${selectedOpenStatus.tone}`}
+                        >
+                          {selectedOpenStatus.label}
+                        </span>
+                      ) : null}
+                      {selectedPlace.isIndoor ? (
+                        <span className="card-indoor-tag">
+                          <Building2 size={11} />
+                          <span>
+                            {selectedPlace.parentBuildingName
+                              ? `Inside ${selectedPlace.parentBuildingName}`
+                              : "Indoor Location"}
+                            {selectedPlace.indoorSteps?.length
+                              ? ` · ${selectedPlace.indoorSteps.length} steps`
+                              : ""}
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
+                    <h2 className="card-title">{selectedPlace.name}</h2>
+                    <p className="card-subtitle">{selectedPlace.note}</p>
+                    {selectedPlace.roomsOrDetails ? (
+                      <p className="card-details-line">
+                        {selectedPlace.roomsOrDetails}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="card-icon-actions">
                     <button
                       type="button"
+                      aria-label="Collapse place details"
+                      title="Collapse card to view more map"
                       onClick={() => {
-                        setArrived(true);
-                        setArrivalBanner(
-                          `You have arrived at ${selectedPlace.name}!`,
-                        );
+                        triggerHaptic("tap");
+                        setCardCollapsed(true);
                       }}
+                      className="card-action-icon-btn"
+                      data-testid="toggle-place-card"
+                    >
+                      <ChevronDown size={18} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Copy place coordinates"
+                      title="Copy coordinates"
+                      onClick={() => void handleCopyCoordinates(selectedPlace)}
+                      className="card-action-icon-btn"
+                    >
+                      {copiedCoords ? <Check size={16} /> : <Copy size={16} />}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={
+                        savedIds.includes(selectedPlace.id)
+                          ? "Remove from saved places"
+                          : "Save place"
+                      }
+                      onClick={() => {
+                        triggerHaptic("tap");
+                        toggleSaved(selectedPlace.id);
+                      }}
+                      className={`card-action-icon-btn${savedIds.includes(selectedPlace.id) ? " is-saved" : ""}`}
+                    >
+                      <Star
+                        size={17}
+                        fill={
+                          savedIds.includes(selectedPlace.id)
+                            ? "currentColor"
+                            : "none"
+                        }
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Report an issue with ${selectedPlace.name}`}
+                      title="Report wrong pin or place issue"
+                      onClick={openReportModal}
+                      className="card-report-btn"
+                      data-testid="report-place-btn"
+                    >
+                      <AlertTriangle size={17} />
+                    </button>
+                  </div>
+                </div>
+
+                {routeStopIds.length > 0 ? (
+                  <div className="multi-stop-strip" aria-label="Multi-stop route itinerary">
+                    <div className="multi-stop-header">
+                      <span>
+                        <Route
+                          size={12}
+                          style={{ verticalAlign: "middle", marginRight: 4 }}
+                        />
+                        Multi-Stop Route ({routeStopIds.length}/4)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setRouteStopIds([])}
+                        className="multi-stop-clear"
+                      >
+                        Clear stops
+                      </button>
+                    </div>
+                    <div className="multi-stop-list">
+                      {routeStopIds.map((stopId, idx) => {
+                        const stopPlace = allPlaces.find((p) => p.id === stopId);
+                        if (!stopPlace) return null;
+                        return (
+                          <span key={`stop-${stopId}`} className="stop-chip">
+                            <strong className="tabular-nums">{idx + 1}.</strong>
+                            <span>{stopPlace.name}</span>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${stopPlace.name} stop`}
+                              onClick={() => toggleStopInRoute(stopId)}
+                              className="stop-chip-remove"
+                            >
+                              <X size={12} />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                {isNavigating && activeRoute ? (
+                  <div className="walk-guidance-box">
+                    <div className="walk-guidance-top">
+                      <div className="walk-metrics">
+                        <span className="walk-distance tabular-nums">
+                          {arrived
+                            ? "Arrived"
+                            : formatDistance(activeRoute.distanceMeters)}
+                        </span>
+                        {!arrived ? (
+                          <span className="walk-eta tabular-nums">
+                            {estimateWalkingMinutes(activeRoute.distanceMeters)} min
+                            walk
+                          </span>
+                        ) : null}
+                      </div>
+                      <span className="walk-status-text">
+                        {arrived
+                          ? "Destination reached"
+                          : activeRoute.routeType === "mapped"
+                            ? "Mapped walkway route"
+                            : "Direct campus estimate"}
+                      </span>
+                    </div>
+
+                    {!arrived && activeRoute.steps[0] ? (
+                      <div className="walk-next-banner">
+                        <span className="walk-next-label">
+                          <Navigation size={13} color="#1A73E8" />
+                          <span>Next: {activeRoute.steps[0].instruction}</span>
+                        </span>
+                        {activeRoute.steps[0].distanceMeters > 0 ? (
+                          <span className="walk-next-dist tabular-nums">
+                            {formatDistance(activeRoute.steps[0].distanceMeters)}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {!arrived ? (
+                      <div className="walk-camera-pills">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic("tap");
+                            void requestCompassPermission();
+                            setMapStyle("satellite");
+                            if (startSourceId === "gps") {
+                              setIsFollowingGps(true);
+                            }
+                            setFollowCamera(true);
+                          }}
+                          className={`walk-camera-pill${followCamera && mapStyle === "satellite" ? " is-active" : ""}`}
+                        >
+                          <Compass size={13} />
+                          <span>Follow Me (19x)</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerHaptic("tap");
+                            setFollowCamera(false);
+                            if (mapStyle === "schematic") {
+                              setMapStyle("satellite");
+                            }
+                            setRouteFitKey((k) => k + 1);
+                          }}
+                          className="walk-camera-pill"
+                        >
+                          <Route size={13} />
+                          <span>Full Route</span>
+                        </button>
+                      </div>
+                    ) : null}
+
+                    {!arrived && activeRoute.steps.length > 0 ? (
+                      <ol className="walk-steps-list">
+                        {activeRoute.steps.map((step, index) => (
+                          <li key={index} className="walk-step-item">
+                            <span>
+                              {index + 1}. {step.instruction}
+                            </span>
+                            {step.distanceMeters > 0 ? (
+                              <span className="walk-step-dist tabular-nums">
+                                {formatDistance(step.distanceMeters)}
+                              </span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ol>
+                    ) : null}
+
+                    <div className="gps-origin-row">
+                      <span>
+                        From:{" "}
+                        <strong>
+                          {startSourceId === "gps" && gpsCoordinate
+                            ? "My Live GPS Location"
+                            : allPlaces.find((p) => p.id === startSourceId)?.name ||
+                              "Central University Gate"}
+                        </strong>
+                      </span>
+                      {startSourceId !== "gps" || !gpsCoordinate ? (
+                        <button
+                          type="button"
+                          onClick={() => void requestUserGps()}
+                          disabled={isLocating}
+                          className="gps-enable-inline"
+                        >
+                          {isLocating ? "Locating…" : "Use my current location"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="card-actions-row">
+                  {!isNavigating ? (
+                    <button
+                      type="button"
+                      onClick={startWalkingNavigation}
                       className="primary-cta"
                     >
-                      <CheckCircle2 size={15} />
-                      <span>Mark Arrived</span>
+                      <Navigation size={15} />
+                      <span>Walk Here</span>
+                    </button>
+                  ) : (
+                    <>
+                      {!arrived ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setArrived(true);
+                            setIsFollowingGps(false);
+                            setFollowCamera(false);
+                            if (
+                              selectedPlace.isIndoor &&
+                              selectedPlace.indoorSteps?.length
+                            ) {
+                              autoTriggeredIndoorRef.current = selectedPlace.id;
+                              openIndoorGuide(selectedPlace);
+                              setArrivalBanner(
+                                `Reached ${selectedPlace.parentBuildingName || selectedPlace.name}! Indoor guide opened.`,
+                              );
+                            } else {
+                              setArrivalBanner(
+                                `You have arrived at ${selectedPlace.name}!`,
+                              );
+                            }
+                          }}
+                          className="primary-cta"
+                        >
+                          <CheckCircle2 size={15} />
+                          <span>Mark Arrived</span>
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsNavigating(false);
+                          setIsFollowingGps(false);
+                          setFollowCamera(false);
+                          setCardCollapsed(false);
+                          autoTriggeredIndoorRef.current = null;
+                          setArrived(false);
+                          setArrivalBanner(null);
+                        }}
+                        className="primary-cta is-stop"
+                      >
+                        <X size={15} />
+                        <span>Stop Walk</span>
+                      </button>
+                    </>
+                  )}
+
+                  {selectedPlace.isIndoor &&
+                  selectedPlace.indoorSteps &&
+                  selectedPlace.indoorSteps.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => openIndoorGuide(selectedPlace)}
+                      className="secondary-cta indoor-cta"
+                      data-testid="start-indoor-guide"
+                    >
+                      <Building2 size={15} />
+                      <span>Start Indoor Guide</span>
                     </button>
                   ) : null}
+
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsNavigating(false);
-                      setIsFollowingGps(false);
-                      setArrived(false);
-                      setArrivalBanner(null);
-                    }}
-                    className="primary-cta is-stop"
+                    onClick={() => toggleStopInRoute(selectedPlace.id)}
+                    className="secondary-cta"
+                    title="Add or remove this place from a multi-stop campus walk"
                   >
-                    <X size={15} />
-                    <span>Stop Walk</span>
+                    <Route size={14} />
+                    <span>
+                      {routeStopIds.includes(selectedPlace.id)
+                        ? "Remove Stop"
+                        : "+ Add Stop"}
+                    </span>
                   </button>
-                </>
-              )}
 
-              <button
-                type="button"
-                onClick={() => toggleStopInRoute(selectedPlace.id)}
-                className="secondary-cta"
-                title="Add or remove this place from a multi-stop campus walk"
-              >
-                <Route size={14} />
-                <span>
-                  {routeStopIds.includes(selectedPlace.id)
-                    ? "Remove Stop"
-                    : "+ Add Stop"}
-                </span>
-              </button>
+                  {isCloudAdmin ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => openAdminForEdit(selectedPlace)}
+                        className="secondary-cta"
+                        data-testid="edit-selected-pin"
+                      >
+                        <Pencil size={14} />
+                        <span>Edit Pin</span>
+                      </button>
+                      {customPlaceIdSet.has(selectedPlace.id) ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            openAdminForEdit(selectedPlace);
+                            setConfirmDeleteId(selectedPlace.id);
+                          }}
+                          className="secondary-cta is-danger-outline"
+                          data-testid="delete-selected-pin"
+                        >
+                          <Trash2 size={14} />
+                          <span>Delete</span>
+                        </button>
+                      ) : null}
+                    </>
+                  ) : null}
 
-              {isCloudAdmin ? (
-                <button
-                  type="button"
-                  onClick={() => openAdminForEdit(selectedPlace)}
-                  className="secondary-cta"
-                  data-testid="edit-selected-pin"
-                >
-                  <Pencil size={14} />
-                  <span>Edit Pin</span>
-                </button>
-              ) : null}
+                  <a
+                    href={googleDirectionsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="secondary-cta"
+                  >
+                    <ExternalLink size={15} />
+                    <span>Google Maps</span>
+                  </a>
+                </div>
 
-              <a
-                href={googleDirectionsUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="secondary-cta"
-              >
-                <ExternalLink size={15} />
-                <span>Google Maps</span>
-              </a>
-            </div>
-
-            <div className="card-footer-meta">
-              <span>{OSM_ATTRIBUTION}</span>
-              <span className="tabular-nums">
-                {selectedPlace.latitude.toFixed(5)},{" "}
-                {selectedPlace.longitude.toFixed(5)}
-              </span>
-            </div>
-          </section>
+                <div className="card-footer-meta">
+                  <span>{OSM_ATTRIBUTION}</span>
+                  <span className="tabular-nums">
+                    {selectedPlace.latitude.toFixed(5)},{" "}
+                    {selectedPlace.longitude.toFixed(5)}
+                  </span>
+                </div>
+              </>
+            )}
+          </motion.section>
         ) : null}
       </main>
 
@@ -2276,7 +3138,23 @@ export function App() {
                     </div>
                   </div>
 
-                  <div className="admin-tools-grid">
+                  <div className="admin-tools-grid is-three">
+                    <button
+                      type="button"
+                      onClick={handlePinAdminCurrentGps}
+                      disabled={locatingAdminGps}
+                      className="pick-map-btn is-gps-pin"
+                      data-testid="admin-pin-gps-btn"
+                    >
+                      {locatingAdminGps ? (
+                        <Loader2 size={15} className="spin" />
+                      ) : (
+                        <Crosshair size={15} />
+                      )}
+                      <span>
+                        {locatingAdminGps ? "Locating…" : "Pin My GPS"}
+                      </span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -2285,10 +3163,10 @@ export function App() {
                       }}
                       className="pick-map-btn"
                     >
-                      <Crosshair size={15} />
+                      <MapPin size={15} />
                       <span>
                         {adminFormMode === "edit"
-                          ? "Click Map to Move"
+                          ? "Click Map"
                           : "Pick on Map"}
                       </span>
                     </button>
@@ -2304,7 +3182,7 @@ export function App() {
                       className="pick-map-btn"
                     >
                       <Move size={15} />
-                      <span>Drag Pins Mode</span>
+                      <span>Drag Pins</span>
                     </button>
                   </div>
 
@@ -2365,6 +3243,18 @@ export function App() {
                     />
                   </div>
 
+                  <IndoorStepBuilder
+                    isIndoor={formIsIndoor}
+                    onToggleIndoor={setFormIsIndoor}
+                    parentBuildingName={formParentBuilding}
+                    onChangeParentBuildingName={setFormParentBuilding}
+                    steps={formIndoorSteps}
+                    onChangeSteps={setFormIndoorSteps}
+                    buildingSuggestions={allPlaces
+                      .filter((p) => !p.isIndoor)
+                      .map((p) => p.name)}
+                  />
+
                   {placeFormError ? (
                     <div className="form-error">{placeFormError}</div>
                   ) : null}
@@ -2374,7 +3264,7 @@ export function App() {
 
                   <button
                     type="submit"
-                    disabled={savingPlace}
+                    disabled={savingPlace || deletingPlaceId !== null}
                     className="primary-cta"
                   >
                     {savingPlace ? (
@@ -2390,6 +3280,68 @@ export function App() {
                         : "Add Place Live"}
                     </span>
                   </button>
+
+                  {adminFormMode === "edit" && editingPlaceId ? (
+                    !SEED_ID_SET.has(editingPlaceId) ? (
+                      confirmDeleteId === editingPlaceId ? (
+                        <div className="delete-confirm-box" role="alert">
+                          <span>
+                            Delete <strong>{formName || "this location"}</strong> permanently?
+                          </span>
+                          <div className="delete-confirm-actions">
+                            <button
+                              type="button"
+                              disabled={deletingPlaceId === editingPlaceId}
+                              onClick={() =>
+                                void handleDeleteOrResetPlace(editingPlaceId)
+                              }
+                              className="danger-cta is-compact"
+                              data-testid="confirm-delete-place-btn"
+                            >
+                              {deletingPlaceId === editingPlaceId ? (
+                                <Loader2 size={14} className="spin" />
+                              ) : (
+                                <Trash2 size={14} />
+                              )}
+                              <span>Confirm Delete</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={deletingPlaceId === editingPlaceId}
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="json-mini-btn"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={savingPlace || deletingPlaceId !== null}
+                          onClick={() => setConfirmDeleteId(editingPlaceId)}
+                          className="danger-cta"
+                          data-testid="delete-place-form-btn"
+                        >
+                          <Trash2 size={15} />
+                          <span>Delete This Place</span>
+                        </button>
+                      )
+                    ) : overrideMap.has(editingPlaceId) ? (
+                      <button
+                        type="button"
+                        disabled={savingPlace || deletingPlaceId !== null}
+                        onClick={() =>
+                          void handleDeleteOrResetPlace(editingPlaceId)
+                        }
+                        className="secondary-cta"
+                        data-testid="reset-seed-form-btn"
+                      >
+                        <RotateCcw size={15} />
+                        <span>Reset Pin to Default Coordinates</span>
+                      </button>
+                    ) : null
+                  ) : null}
                 </form>
 
                 <div className="custom-places-section">
@@ -2424,61 +3376,118 @@ export function App() {
                     </div>
                   </div>
 
-                  <div className="manage-list">
-                    {allPlaces.map((place) => {
-                      const isCustom = customPlaceIdSet.has(place.id);
-                      const isOverridden = overrideMap.has(place.id);
+                  <input
+                    type="search"
+                    value={manageQuery}
+                    onChange={(e) => setManageQuery(e.target.value)}
+                    placeholder="Filter places to edit or delete…"
+                    aria-label="Filter campus places in admin list"
+                    className="field-input manage-search-input"
+                  />
 
-                      return (
-                        <div key={place.id} className="custom-place-item">
-                          <div className="custom-place-info">
-                            <div className="custom-place-name">
-                              {place.name}
-                              {isOverridden ? " (Cloud Edited)" : ""}
+                  <div className="manage-list">
+                    {[...allPlaces]
+                      .sort((a, b) => {
+                        const aCustom = customPlaceIdSet.has(a.id) ? 0 : overrideMap.has(a.id) ? 1 : 2;
+                        const bCustom = customPlaceIdSet.has(b.id) ? 0 : overrideMap.has(b.id) ? 1 : 2;
+                        if (aCustom !== bCustom) return aCustom - bCustom;
+                        return a.name.localeCompare(b.name);
+                      })
+                      .filter((place) => {
+                        const mq = manageQuery.trim().toLowerCase();
+                        if (!mq) return true;
+                        return `${place.name} ${place.category}`.toLowerCase().includes(mq);
+                      })
+                      .map((place) => {
+                        const isCustom = customPlaceIdSet.has(place.id);
+                        const isOverridden = overrideMap.has(place.id);
+                        const isConfirming = confirmDeleteId === place.id;
+                        const isDeleting = deletingPlaceId === place.id;
+
+                        return (
+                          <div key={place.id} className="custom-place-item">
+                            <div className="custom-place-info">
+                              <div className="custom-place-name">
+                                {place.name}
+                                {isCustom ? (
+                                  <span className="custom-place-badge">Added</span>
+                                ) : isOverridden ? (
+                                  <span className="custom-place-badge is-edited">Edited</span>
+                                ) : null}
+                              </div>
+                              <div className="custom-place-coords tabular-nums">
+                                {place.category} · {place.latitude.toFixed(5)},{" "}
+                                {place.longitude.toFixed(5)}
+                              </div>
                             </div>
-                            <div className="custom-place-coords tabular-nums">
-                              {place.category} · {place.latitude.toFixed(5)},{" "}
-                              {place.longitude.toFixed(5)}
+                            <div className="manage-row-actions">
+                              {isConfirming ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={isDeleting}
+                                    onClick={() =>
+                                      void handleDeleteOrResetPlace(place.id)
+                                    }
+                                    className="delete-place-btn has-label is-confirming"
+                                  >
+                                    {isDeleting ? (
+                                      <Loader2 size={12} className="spin" />
+                                    ) : (
+                                      <Trash2 size={12} />
+                                    )}
+                                    <span>Confirm</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isDeleting}
+                                    onClick={() => setConfirmDeleteId(null)}
+                                    className="json-mini-btn"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => openAdminForEdit(place)}
+                                    className="edit-place-btn"
+                                  >
+                                    <Pencil size={12} />
+                                    <span>Edit</span>
+                                  </button>
+                                  {isCustom ? (
+                                    <button
+                                      type="button"
+                                      aria-label={`Delete ${place.name}`}
+                                      title="Delete added place"
+                                      onClick={() => setConfirmDeleteId(place.id)}
+                                      className="delete-place-btn has-label"
+                                    >
+                                      <Trash2 size={13} />
+                                      <span>Delete</span>
+                                    </button>
+                                  ) : isOverridden ? (
+                                    <button
+                                      type="button"
+                                      aria-label={`Reset ${place.name} pin`}
+                                      title="Reset to default coordinates"
+                                      onClick={() =>
+                                        void handleDeleteOrResetPlace(place.id)
+                                      }
+                                      className="delete-place-btn has-label"
+                                    >
+                                      <RotateCcw size={13} />
+                                      <span>Reset</span>
+                                    </button>
+                                  ) : null}
+                                </>
+                              )}
                             </div>
                           </div>
-                          <div className="manage-row-actions">
-                            <button
-                              type="button"
-                              onClick={() => openAdminForEdit(place)}
-                              className="edit-place-btn"
-                            >
-                              <Pencil size={12} />
-                              <span>Edit</span>
-                            </button>
-                            {isCustom ? (
-                              <button
-                                type="button"
-                                aria-label={`Delete ${place.name}`}
-                                title="Delete custom place"
-                                onClick={() =>
-                                  void handleDeleteOrResetPlace(place.id)
-                                }
-                                className="delete-place-btn"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            ) : isOverridden ? (
-                              <button
-                                type="button"
-                                aria-label={`Reset ${place.name} pin`}
-                                title="Reset to default coordinates"
-                                onClick={() =>
-                                  void handleDeleteOrResetPlace(place.id)
-                                }
-                                className="delete-place-btn"
-                              >
-                                <RotateCcw size={14} />
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
                   </div>
                 </div>
 
@@ -2890,6 +3899,64 @@ export function App() {
           </section>
         </div>
       ) : null}
+
+      <AnimatePresence>
+        {radarOpen ? (
+          <ProximityRadarModal
+            places={allPlaces}
+            originCoordinate={originCoordinate}
+            originLabel={
+              startSourceId === "gps" && gpsCoordinate
+                ? "Your Live GPS"
+                : allPlaces.find((p) => p.id === startSourceId)?.name ||
+                  "Campus Gate"
+            }
+            radiusMeters={radarRadiusMeters}
+            onChangeRadius={setRadarRadiusMeters}
+            onSelectPlace={(p) => selectPlace(p, true)}
+            onSelectAndWalk={(p) => {
+              selectPlace(p, true);
+              setIsNavigating(true);
+              setCardCollapsed(true);
+              setMapStyle("satellite");
+              setRouteFitKey((k) => k + 1);
+            }}
+            onClose={() => setRadarOpen(false)}
+          />
+        ) : null}
+
+        {offlineModalOpen ? (
+          <OfflineCampusModal
+            places={allPlaces}
+            isOnline={isOnline}
+            offlinePreviewMode={offlinePreviewMode}
+            onToggleOfflinePreview={setOfflinePreviewMode}
+            onClose={() => setOfflineModalOpen(false)}
+          />
+        ) : null}
+
+        {indoorGuidePlace ? (
+          <IndoorGuideOverlay
+            place={indoorGuidePlace}
+            stepIndex={indoorStepIndex}
+            onChangeStep={setIndoorStepIndex}
+            onComplete={() => {
+              const finishedName = indoorGuidePlace.name;
+              setIndoorGuidePlace(null);
+              setArrived(true);
+              setIsFollowingGps(false);
+              setFollowCamera(false);
+              setArrivalBanner(`You have arrived inside ${finishedName}!`);
+            }}
+            onClose={() => setIndoorGuidePlace(null)}
+          />
+        ) : null}
+      </AnimatePresence>
+
+      <OfflineIndicator
+        forcedOffline={offlinePreviewMode}
+        onExitPreview={() => setOfflinePreviewMode(false)}
+      />
     </div>
   );
 }

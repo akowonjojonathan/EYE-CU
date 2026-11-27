@@ -64,6 +64,19 @@
           "description": "Optional photo URL showing what the place looks like.",
           "maxLength": 500
         },
+        "isIndoor": {
+          "type": "boolean",
+          "description": "True when the place is inside a building and includes indoor step-by-step guidance."
+        },
+        "parentBuildingName": {
+          "type": "string",
+          "description": "Optional parent building or wing name for an indoor place.",
+          "maxLength": 100
+        },
+        "indoorSteps": {
+          "type": "array",
+          "description": "Ordered indoor step-by-step directions (up to 15 steps) from the building entrance to the room."
+        },
         "isSeedOverride": {
           "type": "boolean",
           "description": "True when overriding a built-in campus seed pin."

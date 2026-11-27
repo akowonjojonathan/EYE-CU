@@ -7,7 +7,24 @@ const WALKING_SPEED_METERS_PER_MINUTE = 75;
 const START_NODE = "__route_start__";
 const END_NODE = "__route_end__";
 
-type Edge = { node: string; distance: number };
+const WELL_LIT_WAY_IDS = new Set([
+  "202252644",
+  "205113332",
+  "955602268",
+  "955602271",
+  "955606644",
+  "1171054668",
+  "1171054670",
+]);
+
+export const WELL_LIT_CORRIDOR_POLYLINES: Coordinate[][] = CAMPUS_MAPPED_WAYS.filter(
+  (way) => WELL_LIT_WAY_IDS.has(way.id),
+).map((way) => way.coordinates);
+
+type Edge = {
+  node: string;
+  distance: number;
+};
 
 type Segment = {
   a: Coordinate;
@@ -83,7 +100,7 @@ function compassDirection(from: Coordinate, to: Coordinate): string {
   return dirs[Math.round(bearing / 45) % 8] ?? "North";
 }
 
-function bearingDegrees(from: Coordinate, to: Coordinate): number {
+export function bearingDegrees(from: Coordinate, to: Coordinate): number {
   const dLon = ((to.longitude - from.longitude) * Math.PI) / 180;
   const lat1 = (from.latitude * Math.PI) / 180;
   const lat2 = (to.latitude * Math.PI) / 180;
@@ -190,15 +207,18 @@ const mappedSegments: Segment[] = CAMPUS_MAPPED_WAYS.flatMap((way) => {
 function buildGraph(): Map<string, Edge[]> {
   const graph = new Map<string, Edge[]>();
 
-  const addEdge = (from: string, to: string, distance: number) => {
+  const addEdge = (from: string, to: string, segment: Segment) => {
     const edges = graph.get(from) ?? [];
-    edges.push({ node: to, distance });
+    edges.push({
+      node: to,
+      distance: segment.length,
+    });
     graph.set(from, edges);
   };
 
   for (const segment of mappedSegments) {
-    addEdge(segment.aKey, segment.bKey, segment.length);
-    addEdge(segment.bKey, segment.aKey, segment.length);
+    addEdge(segment.aKey, segment.bKey, segment);
+    addEdge(segment.bKey, segment.aKey, segment);
   }
 
   return graph;
@@ -270,9 +290,15 @@ function addSnapEdges(graph: Map<string, Edge[]>, node: string, snap: Snap) {
   graph.set(node, []);
 
   const addBidirectionalEdge = (target: string, distance: number) => {
-    graph.get(node)?.push({ node: target, distance });
+    graph.get(node)?.push({
+      node: target,
+      distance,
+    });
     const targetEdges = graph.get(target) ?? [];
-    targetEdges.push({ node, distance });
+    targetEdges.push({
+      node,
+      distance,
+    });
     graph.set(target, targetEdges);
   };
 
@@ -363,12 +389,14 @@ export function findWalkingRoute(
       const directSegmentDistance =
         Math.abs(startSnap.progress - endSnap.progress) *
         startSnap.segment.length;
-      graph
-        .get(START_NODE)
-        ?.push({ node: END_NODE, distance: directSegmentDistance });
-      graph
-        .get(END_NODE)
-        ?.push({ node: START_NODE, distance: directSegmentDistance });
+      graph.get(START_NODE)?.push({
+        node: END_NODE,
+        distance: directSegmentDistance,
+      });
+      graph.get(END_NODE)?.push({
+        node: START_NODE,
+        distance: directSegmentDistance,
+      });
     }
 
     const routeKeys = shortestPath(graph, START_NODE, END_NODE);
@@ -452,7 +480,12 @@ export function buildMultiStopRoute(
   let routeType: "mapped" | "direct" = "mapped";
 
   stops.forEach((stop, index) => {
-    const legRoute = findWalkingRoute(cursor, stop, stop.name);
+    const legRoute = findWalkingRoute(
+      cursor,
+      stop,
+      stop.name,
+      MAX_ROUTE_SNAP_METERS,
+    );
     if (legRoute.routeType === "direct") {
       routeType = "direct";
     }

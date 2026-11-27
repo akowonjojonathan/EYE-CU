@@ -20,13 +20,17 @@
   "devDependencies": {
     "prettier": "^3.5.3",
     "tsx": "^4.19.3",
-    "typescript": "~5.8.2"
+    "typescript": "~5.8.2",
+    "vite-plugin-pwa": "^2.0.0",
+    "workbox-window": "^7.4.1"
   },
   "dependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
+    "@google/genai": "^3.6.1",
     "@types/leaflet": "^1.9.22",
     "eslint": "^10.15.0",
     "firebase": "^13.4.0",
+    "framer-motion": "^14.14.0",
     "leaflet": "^1.9.4"
   }
 }

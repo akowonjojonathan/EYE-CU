@@ -38,6 +38,21 @@ service cloud.firestore {
       return category is string && category in ['Campus', 'Academic', 'Food', 'Residence', 'Sports', 'Services'];
     }
 
+    function isValidIndoorStep(step) {
+      return step is map
+        && step.keys().hasAll(['stepNumber', 'directionIcon', 'instructionText'])
+        && step.keys().hasOnly(['stepNumber', 'directionIcon', 'instructionText', 'landmarkImageUrl'])
+        && step.stepNumber is number
+        && step.stepNumber >= 1
+        && step.stepNumber <= 15
+        && step.directionIcon is string
+        && step.directionIcon in ['straight', 'left', 'right', 'stairs-up', 'stairs-down', 'door']
+        && step.instructionText is string
+        && step.instructionText.size() >= 1
+        && step.instructionText.size() <= 240
+        && (!('landmarkImageUrl' in step) || (step.landmarkImageUrl is string && step.landmarkImageUrl.size() <= 40000));
+    }
+
     function isValidCampusPlace(data, placeId) {
       return data.keys().hasAll([
           'id',
@@ -69,6 +84,9 @@ service cloud.firestore {
           'closeHour',
           'roomsOrDetails',
           'imageUrl',
+          'isIndoor',
+          'parentBuildingName',
+          'indoorSteps',
           'isSeedOverride',
           'updatedBy',
           'createdAt',
@@ -102,6 +120,9 @@ service cloud.firestore {
         && data.roomsOrDetails is string
         && data.roomsOrDetails.size() <= 120
         && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 500))
+        && (!('isIndoor' in data) || data.isIndoor is bool)
+        && (!('parentBuildingName' in data) || (data.parentBuildingName is string && data.parentBuildingName.size() <= 100))
+        && (!('indoorSteps' in data) || (data.indoorSteps is list && data.indoorSteps.size() <= 15 && (data.indoorSteps.size() == 0 || isValidIndoorStep(data.indoorSteps[0]))))
         && data.isSeedOverride is bool
         && data.updatedBy is string
         && data.updatedBy.size() <= 128
@@ -189,6 +210,9 @@ service cloud.firestore {
           'closeHour',
           'roomsOrDetails',
           'imageUrl',
+          'isIndoor',
+          'parentBuildingName',
+          'indoorSteps',
           'isSeedOverride',
           'updatedBy',
           'updatedAt'

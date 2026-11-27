@@ -173,7 +173,7 @@ function makePlaceId(name: string): string {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: "64kb" }));
+  app.use(express.json({ limit: "256kb" }));
 
   app.get("/api/healthz", (_req, res) => {
     res.json({ status: "ok" });
@@ -379,6 +379,7 @@ async function startServer() {
         host: "0.0.0.0",
         allowedHosts: true,
         hmr: false,
+        ws: false,
       },
       appType: "spa",
       root: __dirname,

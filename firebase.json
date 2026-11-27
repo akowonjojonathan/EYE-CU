@@ -1,0 +1,40 @@
+{
+  "firestore": {
+    "database": "ai-studio-eyecu-e684f7eb-0322-4e39-a17e-246927725989",
+    "rules": "firestore.rules"
+  },
+  "hosting": {
+    "public": "artifacts/web/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/sw.js",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/manifest.webmanifest",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/manifest+json"
+          }
+        ]
+      }
+    ]
+  }
+}
